@@ -7,14 +7,15 @@ services:
       dockerfile: Dockerfile
     container_name: dante-streamer
     restart: unless-stopped
-    # Host networking is required for Dante mDNS discovery, UDP RTP multicast, and PTP clock
+    # Host networking gives direct access to the USB Dante adapter, multicast & PTP clock
     network_mode: host
     environment:
+      # Network interface dedicated to Dante (e.g. eth1, usb0, enx..., or built-in eth0/end0)
+      - DANTE_INTERFACE=eth1
       - INFERNO_NAME=Dante-Pi
       - INFERNO_TX_CHANNELS=8
       - INFERNO_SAMPLE_RATE=48000
       - HTTP_PORT=8080
-      - DANTE_INTERFACE=eth0 # Change to your Pi's network interface (e.g. eth0, end0, wlan0)
     cap_add:
       - SYS_TIME
       - NET_ADMIN
