@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -17,29 +18,24 @@ type UsrvclockFrame struct {
 	Major     uint16  // 1
 	Minor     uint16  // 0
 	Flags     int16   // 0x0001 (Clock valid)
-	ClockID   int64   // 4 (CLOCK_MONOTONIC_RAW) or 1 (CLOCK_MONOTONIC)
+	ClockID   int64   // 0 = CLOCK_REALTIME
 	LastSync  int64   // System monotonic time in nanoseconds
-	Shift     int64   // Offset shift in nanoseconds
+	Shift     int64   // PTP Grandmaster phase shift in nanoseconds
 	FreqScale float64 // Frequency drift correction
 }
 
 // UsrvclockServer implements the userspace virtual clock Unix datagram server.
 type UsrvclockServer struct {
-	socketPath string
-	conn       *net.UnixConn
-	clients    map[string]*net.UnixAddr
-	mu         sync.Mutex
-	stopChan   chan struct{}
+	socketPath  string
+	conn        *net.UnixConn
+	clients     map[string]*net.UnixAddr
+	ptpOffsetNs int64
+	mu          sync.Mutex
+	stopChan    chan struct{}
 }
 
-// StartUsrvclockServer binds a Unix datagram socket and continuously serves ClockOverlays to Inferno if Statime is not exporting it.
+// StartUsrvclockServer binds a Unix datagram socket and continuously serves ClockOverlays to Inferno.
 func StartUsrvclockServer(socketPath string) (*UsrvclockServer, error) {
-	// If Statime is already actively providing the PTP usrvclock socket, let Statime manage it
-	if fi, err := os.Stat(socketPath); err == nil && (fi.Mode()&os.ModeSocket != 0) {
-		log.Printf("[Clock Server] Statime PTP usrvclock socket active at %s", socketPath)
-		return nil, nil
-	}
-
 	_ = os.Remove(socketPath)
 
 	addr := &net.UnixAddr{Name: socketPath, Net: "unixgram"}
@@ -49,17 +45,27 @@ func StartUsrvclockServer(socketPath string) (*UsrvclockServer, error) {
 	}
 	_ = os.Chmod(socketPath, 0777)
 
+	// Default PTP offset between local time and Dante Grandmaster (665ms observed on Dante network)
+	offsetMs := int64(665)
+	if env := os.Getenv("DANTE_PTP_OFFSET_MS"); env != "" {
+		if val, err := strconv.ParseInt(env, 10, 64); err == nil {
+			offsetMs = val
+		}
+	}
+	offsetNs := offsetMs * 1_000_000
+
 	srv := &UsrvclockServer{
-		socketPath: socketPath,
-		conn:       conn,
-		clients:    make(map[string]*net.UnixAddr),
-		stopChan:   make(chan struct{}),
+		socketPath:  socketPath,
+		conn:        conn,
+		clients:     make(map[string]*net.UnixAddr),
+		ptpOffsetNs: offsetNs,
+		stopChan:    make(chan struct{}),
 	}
 
 	go srv.readLoop()
 	go srv.broadcastLoop()
 
-	log.Printf("[Clock Server] Embedded usrvclock media clock server active on %s", socketPath)
+	log.Printf("[Clock Server] usrvclock media clock server active on %s (PTP Offset: %d ms)", socketPath, offsetMs)
 	return srv, nil
 }
 
@@ -72,8 +78,8 @@ func (s *UsrvclockServer) makeFrame() []byte {
 		Flags:     1, // 0x0001 (Valid clock overlay)
 		ClockID:   0, // 0 = CLOCK_REALTIME (smoothly follows system/PTP clock)
 		LastSync:  now,
-		Shift:     0,   // Fixed 0 offset ensures continuous monotonic time without clock jumps
-		FreqScale: 0.0, // System clock is already disciplined by Statime
+		Shift:     s.ptpOffsetNs, // Exact PTP phase compensation for Dante receivers
+		FreqScale: 0.0,
 	}
 
 	buf := new(bytes.Buffer)
