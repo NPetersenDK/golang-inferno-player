@@ -33,15 +33,22 @@ chmod 777 /tmp/dante_player /run
 
 # 2. Configure and bind Statime & Inferno to the chosen interface
 export INFERNO_BIND_IP="$DANTE_IFACE"
-sed -i "s/interface = \".*\"/interface = \"$DANTE_IFACE\"/g" /etc/inferno/inferno-ptpv1.toml
+export INFERNO_CLOCK_PATH="/tmp/usrvclock"
+
+# Copy config to /tmp to avoid "Device or resource busy" on docker bind-mounts
+cp /etc/inferno/inferno-ptpv1.toml /tmp/inferno-ptpv1.toml
+sed -i "s/interface = \".*\"/interface = \"$DANTE_IFACE\"/g" /tmp/inferno-ptpv1.toml
 
 # Ensure kernel routes multicast (Dante PTP 224.0.1.129, mDNS 224.0.0.251, Audio 239.255.0.0/16) to Dante NIC
 ip link set "$DANTE_IFACE" multicast on 2>/dev/null || true
+ip link set "$DANTE_IFACE" allmulticast on 2>/dev/null || true
+sysctl -w "net.ipv4.conf.$DANTE_IFACE.rp_filter=0" 2>/dev/null || true
+sysctl -w net.ipv4.conf.all.rp_filter=0 2>/dev/null || true
 ip route add 224.0.0.0/4 dev "$DANTE_IFACE" 2>/dev/null || true
 
 # 3. Start Statime PTP clock daemon in background on Dante interface
 echo "[PTP] Starting Statime clock daemon on interface $DANTE_IFACE..."
-statime -c /etc/inferno/inferno-ptpv1.toml &
+RUST_LOG=debug statime -c /tmp/inferno-ptpv1.toml &
 STATIME_PID=$!
 
 # Trap signals for graceful shutdown
@@ -52,9 +59,7 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
-# Give Statime PTP clock daemon a moment to lock and open usrvclock socket
-sleep 2
-
 # 4. Start Go Dante Web Player
 echo "[Web Player] Starting Dante Web Player on port ${HTTP_PORT:-8085}..."
+sleep 3
 exec dante-player -port "${HTTP_PORT:-8085}" -pipe-dir /tmp/dante_player -dante-name "${INFERNO_NAME:-Dante-Pi}" -config "/opt/dante-player/config.yaml"

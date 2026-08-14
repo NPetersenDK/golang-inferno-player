@@ -49,6 +49,10 @@ func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
 	}
 	sort.Ints(mgr.zoneOrder)
 
+	// Start embedded userspace virtual clock servers for Inferno
+	_, _ = StartUsrvclockServer("/tmp/usrvclock")
+	_, _ = StartUsrvclockServer("/run/ptp-usrvclock")
+
 	go mgr.eventBroadcaster()
 	go mgr.masterDanteAudioLoop()
 

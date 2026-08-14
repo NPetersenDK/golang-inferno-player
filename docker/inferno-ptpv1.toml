@@ -2,8 +2,12 @@
 loglevel = "info"
 domain = 0
 slave-only = true
+priority1 = 255
+priority2 = 255
+virtual-system-clock = true
 virtual-system-clock-base = "monotonic"
-usrvclock-export = true
+usrvclock-export = false
+usrvclock-path = "/tmp/usrvclock"
 
 [[port]]
 interface = "eth0"
