@@ -2,6 +2,7 @@
 domain = 0
 slave-only = true
 virtual-system-clock-base = "monotonic"
+usrvclock-export = true
 
 [[port]]
 interface = "eth0"

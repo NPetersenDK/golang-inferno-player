@@ -28,8 +28,8 @@ else
     ip -brief link
 fi
 
-mkdir -p /etc/inferno /tmp/dante_player /opt/dante-player/data /root/.local/state/inferno_aoip
-chmod 777 /tmp/dante_player
+mkdir -p /etc/inferno /tmp/dante_player /opt/dante-player/data /root/.local/state/inferno_aoip /run
+chmod 777 /tmp/dante_player /run
 
 # 2. Configure and bind Statime & Inferno to the chosen interface
 export INFERNO_BIND_IP="$DANTE_IFACE"
@@ -48,7 +48,8 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
-sleep 1
+# Give Statime PTP clock daemon a moment to lock and open usrvclock socket
+sleep 2
 
 # 4. Start Go Dante Web Player
 echo "[Web Player] Starting Dante Web Player on port ${HTTP_PORT:-8085}..."
