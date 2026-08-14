@@ -1,7 +1,11 @@
 package engine
 
 import (
+	"encoding/binary"
 	"fmt"
+	"log"
+	"os/exec"
+	"sort"
 	"sync"
 	"time"
 
@@ -21,6 +25,7 @@ type SystemStatus struct {
 type PlaybackManager struct {
 	cfg        *config.AppConfig
 	zones      map[int]*ZonePlayer
+	zoneOrder  []int
 	stateChan  chan struct{}
 	listeners  map[chan SystemStatus]struct{}
 	listenerMu sync.Mutex
@@ -32,16 +37,122 @@ func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
 	mgr := &PlaybackManager{
 		cfg:       cfg,
 		zones:     make(map[int]*ZonePlayer),
+		zoneOrder: make([]int, 0),
 		stateChan: stateChan,
 		listeners: make(map[chan SystemStatus]struct{}),
 	}
 
 	for _, zcfg := range cfg.Zones {
 		mgr.zones[zcfg.ID] = NewZonePlayer(zcfg, stateChan)
+		mgr.zoneOrder = append(mgr.zoneOrder, zcfg.ID)
 	}
+	sort.Ints(mgr.zoneOrder)
 
 	go mgr.eventBroadcaster()
+	go mgr.masterDanteAudioLoop()
+
 	return mgr
+}
+
+// masterDanteAudioLoop keeps a single continuous 8-channel 48kHz audio stream running into pcm.inferno.
+// This ensures Dante Controller routing is always locked and active.
+func (m *PlaybackManager) masterDanteAudioLoop() {
+	const (
+		sampleRate   = 48000
+		numChannels  = 8
+		framesPerTick = 960 // 20ms block
+		bytesPerTick  = framesPerTick * numChannels * 4
+	)
+
+	masterBuf := make([]byte, bytesPerTick)
+
+	for {
+		log.Printf("[Dante Master] Starting continuous 8-channel Dante ALSA transmitter (pcm.inferno)...")
+
+		cmd := exec.Command("aplay", "-D", "inferno", "-t", "raw", "-f", "S32_LE", "-r", "48000", "-c", "8", "-q", "-")
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			log.Printf("[Dante Master] Notice: Could not open aplay pipe: %v. Running in emulation mode.", err)
+			m.emulateMasterLoop(framesPerTick)
+			continue
+		}
+
+		if err := cmd.Start(); err != nil {
+			log.Printf("[Dante Master] Notice: Could not start aplay: %v. Running in emulation mode.", err)
+			_ = stdin.Close()
+			m.emulateMasterLoop(framesPerTick)
+			continue
+		}
+
+		log.Printf("[Dante Master] Dante ALSA audio transmitter active (8 TX channels). Dante-Pi is now broadcasting.")
+
+		ticker := time.NewTicker(20 * time.Millisecond)
+		aplayAlive := true
+
+		for aplayAlive {
+			<-ticker.C
+
+			// 1. Clear 8-channel master buffer (silence by default)
+			for i := range masterBuf {
+				masterBuf[i] = 0
+			}
+
+			// 2. Mix active zone audio into respective stereo channel slots
+			m.mu.RLock()
+			for zoneIdx, zoneID := range m.zoneOrder {
+				if zoneIdx*2+1 >= numChannels {
+					break
+				}
+				player := m.zones[zoneID]
+				if player == nil {
+					continue
+				}
+
+				samples, hasAudio := player.PullSamples(framesPerTick)
+				if hasAudio && len(samples) > 0 {
+					// Slot into channels: Left = zoneIdx*2, Right = zoneIdx*2 + 1
+					chL := zoneIdx * 2
+					chR := zoneIdx * 2 + 1
+
+					numStereo := len(samples) / 2
+					for f := 0; f < numStereo && f < framesPerTick; f++ {
+						frameOffset := f * numChannels * 4
+						// Left sample
+						binary.LittleEndian.PutUint32(masterBuf[frameOffset+chL*4:frameOffset+(chL+1)*4], uint32(samples[f*2]))
+						// Right sample
+						binary.LittleEndian.PutUint32(masterBuf[frameOffset+chR*4:frameOffset+(chR+1)*4], uint32(samples[f*2+1]))
+					}
+				}
+			}
+			m.mu.RUnlock()
+
+			// 3. Send 8-channel frame to Inferno ALSA soundcard
+			if _, err := stdin.Write(masterBuf); err != nil {
+				log.Printf("[Dante Master] ALSA write error (%v). Restarting transmitter...", err)
+				aplayAlive = false
+			}
+		}
+
+		ticker.Stop()
+		_ = stdin.Close()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func (m *PlaybackManager) emulateMasterLoop(framesPerTick int) {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		m.mu.RLock()
+		for _, player := range m.zones {
+			player.PullSamples(framesPerTick)
+		}
+		m.mu.RUnlock()
+	}
 }
 
 func (m *PlaybackManager) GetZone(id int) (*ZonePlayer, error) {
@@ -115,72 +226,78 @@ func (m *PlaybackManager) GetStatus() SystemStatus {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	var zoneStates []ZoneState
-	activeCount := 0
-
-	for _, zcfg := range m.cfg.Zones {
-		if z, ok := m.zones[zcfg.ID]; ok {
-			state := z.GetState()
-			if state.Status == StatusPlaying || state.Status == StatusBuffering {
-				activeCount++
+	active := 0
+	zones := make([]ZoneState, 0, len(m.zoneOrder))
+	for _, id := range m.zoneOrder {
+		if z, ok := m.zones[id]; ok {
+			st := z.GetState()
+			if st.Status == StatusPlaying {
+				active++
 			}
-			zoneStates = append(zoneStates, state)
+			zones = append(zones, st)
 		}
 	}
 
 	return SystemStatus{
 		DanteDevice:   m.cfg.DanteName,
-		DanteChannels: len(m.cfg.Zones) * 2,
+		DanteChannels: 8,
 		SampleRate:    m.cfg.SampleRate,
-		ClockStatus:   "PTP Dante Clock Synced (48.0 kHz)",
-		PTPStatus:     "Active",
-		ActiveStreams: activeCount,
-		Zones:         zoneStates,
+		ClockStatus:   "PTP Locked (48kHz)",
+		PTPStatus:     "Slave to Dante Master",
+		ActiveStreams: active,
+		Zones:         zones,
 	}
 }
 
 func (m *PlaybackManager) SubscribeState() chan SystemStatus {
-	ch := make(chan SystemStatus, 10)
-	m.listenerMu.Lock()
-	m.listeners[ch] = struct{}{}
-	m.listenerMu.Unlock()
-
-	// Send immediate initial status
-	ch <- m.GetStatus()
-	return ch
+	return m.Subscribe()
 }
 
 func (m *PlaybackManager) UnsubscribeState(ch chan SystemStatus) {
+	m.Unsubscribe(ch)
+}
+
+func (m *PlaybackManager) Subscribe() chan SystemStatus {
 	m.listenerMu.Lock()
+	defer m.listenerMu.Unlock()
+
+	ch := make(chan SystemStatus, 10)
+	m.listeners[ch] = struct{}{}
+	return ch
+}
+
+func (m *PlaybackManager) Unsubscribe(ch chan SystemStatus) {
+	m.listenerMu.Lock()
+	defer m.listenerMu.Unlock()
+
 	delete(m.listeners, ch)
 	close(ch)
-	m.listenerMu.Unlock()
 }
 
 func (m *PlaybackManager) eventBroadcaster() {
-	// Send status tick every 100ms for smooth VU meters and state updates
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	broadcastTicker := time.NewTicker(100 * time.Millisecond)
+	defer broadcastTicker.Stop()
 
 	for {
 		select {
 		case <-m.stateChan:
 			m.broadcast()
-		case <-ticker.C:
+		case <-broadcastTicker.C:
 			m.broadcast()
 		}
 	}
 }
 
 func (m *PlaybackManager) broadcast() {
-	status := m.GetStatus()
+	st := m.GetStatus()
 
 	m.listenerMu.Lock()
+	defer m.listenerMu.Unlock()
+
 	for ch := range m.listeners {
 		select {
-		case ch <- status:
+		case ch <- st:
 		default:
 		}
 	}
-	m.listenerMu.Unlock()
 }

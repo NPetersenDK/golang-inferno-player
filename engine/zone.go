@@ -58,6 +58,7 @@ type ZonePlayer struct {
 
 	cancelFunc context.CancelFunc
 	stateChan  chan struct{}
+	audioChan  chan []int32 // stereo audio frames (interleaved L, R)
 }
 
 func NewZonePlayer(cfg config.ZoneConfig, stateChan chan struct{}) *ZonePlayer {
@@ -67,6 +68,7 @@ func NewZonePlayer(cfg config.ZoneConfig, stateChan chan struct{}) *ZonePlayer {
 		volume:    85,
 		muted:     false,
 		stateChan: stateChan,
+		audioChan: make(chan []int32, 20),
 	}
 	z.setPeakL(0)
 	z.setPeakR(0)
@@ -130,6 +132,11 @@ func (z *ZonePlayer) Stop() {
 	z.errMessage = ""
 	z.mu.Unlock()
 
+	// Drain any pending audio frames
+	for len(z.audioChan) > 0 {
+		<-z.audioChan
+	}
+
 	z.setPeakL(0)
 	z.setPeakR(0)
 	z.notifyState()
@@ -174,9 +181,9 @@ func (z *ZonePlayer) Play(preset *config.StationPreset, customURL string, custom
 }
 
 func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
-	log.Printf("[Zone %d] Starting stream for %s on ALSA device: %s", z.cfg.ID, streamURL, z.cfg.AlsaDevice)
+	log.Printf("[Zone %d] Decoding stream for %s (%s)", z.cfg.ID, z.stationName, streamURL)
 
-	// 1. Launch FFmpeg decoder (Decodes MP3/AAC/HLS/Icecast into 48kHz 32-bit PCM)
+	// Launch FFmpeg to decode audio into 48kHz 32-bit stereo PCM
 	ffmpegArgs := []string{
 		"-hide_banner",
 		"-loglevel", "error",
@@ -193,14 +200,14 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 	}
 
 	ffmpegCmd := exec.CommandContext(ctx, "ffmpeg", ffmpegArgs...)
-	ffmpegStdout, err := ffmpegCmd.StdoutPipe()
+	stdout, err := ffmpegCmd.StdoutPipe()
 	if err != nil {
-		z.setError(fmt.Sprintf("Failed to initialize decoder: %v", err))
+		z.setError(fmt.Sprintf("Failed to open decoder pipe: %v", err))
 		return
 	}
 
 	if err := ffmpegCmd.Start(); err != nil {
-		z.setError(fmt.Sprintf("FFmpeg start error: %v", err))
+		z.setError(fmt.Sprintf("Decoder start failed: %v", err))
 		return
 	}
 	defer func() {
@@ -209,66 +216,13 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 		}
 	}()
 
-	// 2. Launch ALSA aplay process to pipe directly to Dante ALSA soundcard
-	alsaDevice := z.cfg.AlsaDevice
-	if alsaDevice == "" {
-		alsaDevice = fmt.Sprintf("dante_zone%d", z.cfg.ID)
-	}
-
-	aplayArgs := []string{
-		"-D", alsaDevice,
-		"-t", "raw",
-		"-f", "S32_LE",
-		"-r", "48000",
-		"-c", "2",
-		"-q",
-		"-",
-	}
-
-	aplayCmd := exec.CommandContext(ctx, "aplay", aplayArgs...)
-	alsaStdin, err := aplayCmd.StdinPipe()
-	var alsaWriter io.WriteCloser
-	if err == nil {
-		if err := aplayCmd.Start(); err == nil {
-			alsaWriter = alsaStdin
-			log.Printf("[Zone %d] Connected directly to Dante ALSA PCM device: %s", z.cfg.ID, alsaDevice)
-		} else {
-			log.Printf("[Zone %d] Notice: aplay not available or failed (%v). Running in DSP mode.", z.cfg.ID, err)
-		}
-	}
-	defer func() {
-		if alsaWriter != nil {
-			_ = alsaWriter.Close()
-		}
-		if aplayCmd != nil && aplayCmd.Process != nil {
-			_ = aplayCmd.Process.Kill()
-		}
-	}()
-
-	// Transition status to Playing
 	z.mu.Lock()
 	z.status = StatusPlaying
 	z.mu.Unlock()
 	z.notifyState()
 
-	// Buffer: 1024 frames (1024 frames * 2 channels * 4 bytes = 8192 bytes)
-	buf := make([]byte, 8192)
-	decayTicker := time.NewTicker(50 * time.Millisecond)
-	defer decayTicker.Stop()
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-decayTicker.C:
-				curL := z.getPeakL()
-				curR := z.getPeakR()
-				z.setPeakL(curL * 0.88)
-				z.setPeakR(curR * 0.88)
-			}
-		}
-	}()
+	// Chunk size: 960 frames (20ms at 48kHz) * 2 channels * 4 bytes = 7680 bytes
+	rawBuf := make([]byte, 7680)
 
 	for {
 		select {
@@ -277,78 +231,102 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 		default:
 		}
 
-		n, err := io.ReadFull(ffmpegStdout, buf)
+		n, err := io.ReadFull(stdout, rawBuf)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				log.Printf("[Zone %d] Stream EOF/disconnect, reconnecting in 2s...", z.cfg.ID)
+				log.Printf("[Zone %d] Stream EOF, reconnecting in 2s...", z.cfg.ID)
 				time.Sleep(2 * time.Second)
 				if ctx.Err() == nil {
 					go z.streamLoop(ctx, streamURL)
 				}
 				return
 			}
-			z.setError(fmt.Sprintf("Read error: %v", err))
+			z.setError(fmt.Sprintf("Stream read error: %v", err))
 			return
 		}
 
 		if n > 0 {
-			z.mu.RLock()
-			vol := z.volume
-			muted := z.muted
-			z.mu.RUnlock()
-
-			volFactor := float64(vol) / 100.0
-			if muted {
-				volFactor = 0.0
-			}
-
-			// Process 32-bit interleaved PCM samples
-			var maxL, maxR int32
 			numSamples := n / 4
-			for i := 0; i < numSamples; i += 2 {
-				// Left sample
-				sampleL := int32(binary.LittleEndian.Uint32(buf[i*4 : (i+1)*4]))
-				if volFactor != 1.0 {
-					sampleL = int32(float64(sampleL) * volFactor)
-					binary.LittleEndian.PutUint32(buf[i*4:(i+1)*4], uint32(sampleL))
-				}
-				absL := absInt32(sampleL)
-				if absL > maxL {
-					maxL = absL
-				}
-
-				// Right sample
-				if i+1 < numSamples {
-					sampleR := int32(binary.LittleEndian.Uint32(buf[(i+1)*4 : (i+2)*4]))
-					if volFactor != 1.0 {
-						sampleR = int32(float64(sampleR) * volFactor)
-						binary.LittleEndian.PutUint32(buf[(i+1)*4:(i+2)*4], uint32(sampleR))
-					}
-					absR := absInt32(sampleR)
-					if absR > maxR {
-						maxR = absR
-					}
-				}
+			samples := make([]int32, numSamples)
+			for i := 0; i < numSamples; i++ {
+				samples[i] = int32(binary.LittleEndian.Uint32(rawBuf[i*4 : (i+1)*4]))
 			}
 
-			// Update stereo peak meters
-			peakL := float64(maxL) / float64(math.MaxInt32)
-			peakR := float64(maxR) / float64(math.MaxInt32)
-			if peakL > z.getPeakL() {
-				z.setPeakL(peakL)
-			}
-			if peakR > z.getPeakR() {
-				z.setPeakR(peakR)
-			}
-
-			// Write audio to ALSA Inferno soundcard
-			if alsaWriter != nil {
-				_, _ = alsaWriter.Write(buf[:n])
+			// Send samples non-blocking to master audio mixer
+			select {
+			case z.audioChan <- samples:
+			case <-ctx.Done():
+				return
+			default:
+				// If channel is full, drop older frame to keep realtime sync
+				select {
+				case <-z.audioChan:
+				default:
+				}
+				z.audioChan <- samples
 			}
 		}
+	}
+}
+
+// PullSamples pulls up to numFrames stereo samples (numFrames * 2 int32s), applies volume and updates peaks
+func (z *ZonePlayer) PullSamples(numFrames int) ([]int32, bool) {
+	select {
+	case samples := <-z.audioChan:
+		z.mu.RLock()
+		vol := z.volume
+		muted := z.muted
+		isPlaying := (z.status == StatusPlaying)
+		z.mu.RUnlock()
+
+		if !isPlaying {
+			z.setPeakL(0)
+			z.setPeakR(0)
+			return nil, false
+		}
+
+		volFactor := float64(vol) / 100.0
+		if muted {
+			volFactor = 0.0
+		}
+
+		var maxL, maxR int32
+		for i := 0; i < len(samples); i += 2 {
+			if volFactor != 1.0 {
+				samples[i] = int32(float64(samples[i]) * volFactor)
+			}
+			absL := absInt32(samples[i])
+			if absL > maxL {
+				maxL = absL
+			}
+
+			if i+1 < len(samples) {
+				if volFactor != 1.0 {
+					samples[i+1] = int32(float64(samples[i+1]) * volFactor)
+				}
+				absR := absInt32(samples[i+1])
+				if absR > maxR {
+					maxR = absR
+				}
+			}
+		}
+
+		peakL := float64(maxL) / float64(math.MaxInt32)
+		peakR := float64(maxR) / float64(math.MaxInt32)
+		z.setPeakL(peakL)
+		z.setPeakR(peakR)
+
+		return samples, true
+	default:
+		// No new audio frames (decay peaks)
+		curL := z.getPeakL()
+		curR := z.getPeakR()
+		z.setPeakL(curL * 0.9)
+		z.setPeakR(curR * 0.9)
+		return nil, false
 	}
 }
 
