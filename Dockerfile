@@ -105,6 +105,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y \
     libasound2 \
     libasound2-plugins \
+    alsa-utils \
     ffmpeg \
     ca-certificates \
     iproute2 \

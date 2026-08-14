@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"math"
-	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -43,32 +42,31 @@ type ZoneState struct {
 }
 
 type ZonePlayer struct {
-	cfg        config.ZoneConfig
-	mu         sync.RWMutex
-	status     PlaybackStatus
-	stationID  string
+	cfg         config.ZoneConfig
+	mu          sync.RWMutex
+	status      PlaybackStatus
+	stationID   string
 	stationName string
-	streamURL  string
-	title      string
-	volume     int
-	muted      bool
-	errMessage string
+	streamURL   string
+	title       string
+	volume      int
+	muted       bool
+	errMessage  string
 
-	peakL      atomic.Uint64 // float64 bits
-	peakR      atomic.Uint64 // float64 bits
+	peakL atomic.Uint64 // float64 bits
+	peakR atomic.Uint64 // float64 bits
 
 	cancelFunc context.CancelFunc
-	pipeWriter io.WriteCloser
 	stateChan  chan struct{}
 }
 
 func NewZonePlayer(cfg config.ZoneConfig, stateChan chan struct{}) *ZonePlayer {
 	z := &ZonePlayer{
-		cfg:        cfg,
-		status:     StatusIdle,
-		volume:     85,
-		muted:      false,
-		stateChan:  stateChan,
+		cfg:       cfg,
+		status:    StatusIdle,
+		volume:    85,
+		muted:     false,
+		stateChan: stateChan,
 	}
 	z.setPeakL(0)
 	z.setPeakR(0)
@@ -176,26 +174,12 @@ func (z *ZonePlayer) Play(preset *config.StationPreset, customURL string, custom
 }
 
 func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
-	pipePath := z.cfg.PipePath
-	_ = os.MkdirAll(os.Getenv("TMPDIR"), 0755)
+	log.Printf("[Zone %d] Starting stream for %s on ALSA device: %s", z.cfg.ID, streamURL, z.cfg.AlsaDevice)
 
-	// Ensure FIFO exists or standard file
-	createFifoIfNeeded(pipePath)
-
-	log.Printf("[Zone %d] Starting stream for %s (Pipe: %s)", z.cfg.ID, streamURL, pipePath)
-
-	// Open pipe for writing (blocks until reader opens or opens in non-blocking/reopen mode)
-	pipeOut, err := openPipeWriter(pipePath)
-	if err != nil {
-		log.Printf("[Zone %d] Warning opening pipe: %v (will stream to null if Dante daemon not connected)", z.cfg.ID, err)
-	} else {
-		defer pipeOut.Close()
-	}
-
-	// Launch ffmpeg decoder
-	args := []string{
+	// 1. Launch FFmpeg decoder (Decodes MP3/AAC/HLS/Icecast into 48kHz 32-bit PCM)
+	ffmpegArgs := []string{
 		"-hide_banner",
-		"-loglevel", "warning",
+		"-loglevel", "error",
 		"-reconnect", "1",
 		"-reconnect_at_eof", "1",
 		"-reconnect_streamed", "1",
@@ -208,18 +192,60 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 		"-",
 	}
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	stdout, err := cmd.StdoutPipe()
+	ffmpegCmd := exec.CommandContext(ctx, "ffmpeg", ffmpegArgs...)
+	ffmpegStdout, err := ffmpegCmd.StdoutPipe()
 	if err != nil {
-		z.setError(fmt.Sprintf("Failed to start decoder pipe: %v", err))
+		z.setError(fmt.Sprintf("Failed to initialize decoder: %v", err))
 		return
 	}
 
-	if err := cmd.Start(); err != nil {
-		z.setError(fmt.Sprintf("FFmpeg execution error: %v", err))
+	if err := ffmpegCmd.Start(); err != nil {
+		z.setError(fmt.Sprintf("FFmpeg start error: %v", err))
 		return
 	}
+	defer func() {
+		if ffmpegCmd.Process != nil {
+			_ = ffmpegCmd.Process.Kill()
+		}
+	}()
 
+	// 2. Launch ALSA aplay process to pipe directly to Dante ALSA soundcard
+	alsaDevice := z.cfg.AlsaDevice
+	if alsaDevice == "" {
+		alsaDevice = fmt.Sprintf("dante_zone%d", z.cfg.ID)
+	}
+
+	aplayArgs := []string{
+		"-D", alsaDevice,
+		"-t", "raw",
+		"-f", "S32_LE",
+		"-r", "48000",
+		"-c", "2",
+		"-q",
+		"-",
+	}
+
+	aplayCmd := exec.CommandContext(ctx, "aplay", aplayArgs...)
+	alsaStdin, err := aplayCmd.StdinPipe()
+	var alsaWriter io.WriteCloser
+	if err == nil {
+		if err := aplayCmd.Start(); err == nil {
+			alsaWriter = alsaStdin
+			log.Printf("[Zone %d] Connected directly to Dante ALSA PCM device: %s", z.cfg.ID, alsaDevice)
+		} else {
+			log.Printf("[Zone %d] Notice: aplay not available or failed (%v). Running in DSP mode.", z.cfg.ID, err)
+		}
+	}
+	defer func() {
+		if alsaWriter != nil {
+			_ = alsaWriter.Close()
+		}
+		if aplayCmd != nil && aplayCmd.Process != nil {
+			_ = aplayCmd.Process.Kill()
+		}
+	}()
+
+	// Transition status to Playing
 	z.mu.Lock()
 	z.status = StatusPlaying
 	z.mu.Unlock()
@@ -236,11 +262,10 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 			case <-ctx.Done():
 				return
 			case <-decayTicker.C:
-				// Smooth VU decay
 				curL := z.getPeakL()
 				curR := z.getPeakR()
-				z.setPeakL(curL * 0.85)
-				z.setPeakR(curR * 0.85)
+				z.setPeakL(curL * 0.88)
+				z.setPeakR(curR * 0.88)
 			}
 		}
 	}()
@@ -248,25 +273,24 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 	for {
 		select {
 		case <-ctx.Done():
-			_ = cmd.Process.Kill()
 			return
 		default:
 		}
 
-		n, err := io.ReadFull(stdout, buf)
+		n, err := io.ReadFull(ffmpegStdout, buf)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				log.Printf("[Zone %d] Stream EOF/disconnect, retrying in 2s...", z.cfg.ID)
+				log.Printf("[Zone %d] Stream EOF/disconnect, reconnecting in 2s...", z.cfg.ID)
 				time.Sleep(2 * time.Second)
 				if ctx.Err() == nil {
 					go z.streamLoop(ctx, streamURL)
 				}
 				return
 			}
-			z.setError(fmt.Sprintf("Read error from audio source: %v", err))
+			z.setError(fmt.Sprintf("Read error: %v", err))
 			return
 		}
 
@@ -310,23 +334,19 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 				}
 			}
 
-			// Calculate normalized peaks (0.0 to 1.0)
-			peakLNorm := float64(maxL) / float64(math.MaxInt32)
-			peakRNorm := float64(maxR) / float64(math.MaxInt32)
-			if peakLNorm > z.getPeakL() {
-				z.setPeakL(peakLNorm)
+			// Update stereo peak meters
+			peakL := float64(maxL) / float64(math.MaxInt32)
+			peakR := float64(maxR) / float64(math.MaxInt32)
+			if peakL > z.getPeakL() {
+				z.setPeakL(peakL)
 			}
-			if peakRNorm > z.getPeakR() {
-				z.setPeakR(peakRNorm)
+			if peakR > z.getPeakR() {
+				z.setPeakR(peakR)
 			}
 
-			// Write to FIFO pipe
-			if pipeOut != nil {
-				if _, werr := pipeOut.Write(buf[:n]); werr != nil {
-					// Reader might have temporarily dropped, attempt reopen
-					_ = pipeOut.Close()
-					pipeOut, _ = openPipeWriter(pipePath)
-				}
+			// Write audio to ALSA Inferno soundcard
+			if alsaWriter != nil {
+				_, _ = alsaWriter.Write(buf[:n])
 			}
 		}
 	}
@@ -337,17 +357,14 @@ func (z *ZonePlayer) setError(msg string) {
 	z.status = StatusError
 	z.errMessage = msg
 	z.mu.Unlock()
-	z.setPeakL(0)
-	z.setPeakR(0)
+	log.Printf("[Zone %d] Error: %s", z.cfg.ID, msg)
 	z.notifyState()
 }
 
 func (z *ZonePlayer) notifyState() {
-	if z.stateChan != nil {
-		select {
-		case z.stateChan <- struct{}{}:
-		default:
-		}
+	select {
+	case z.stateChan <- struct{}{}:
+	default:
 	}
 }
 
