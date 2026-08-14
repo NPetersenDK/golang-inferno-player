@@ -286,7 +286,7 @@ function renderStations() {
     `;
 
     col.querySelector(".btn-play").addEventListener("click", () => {
-      fetch(`/api/zones/${activeZoneId}/preset`, {
+      fetch(`/api/zones/${activeZoneId}/play`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ preset_id: st.id })

@@ -22,9 +22,11 @@ type Server struct {
 }
 
 type PlayRequest struct {
-	PresetID string `json:"preset_id,omitempty"`
-	URL      string `json:"url,omitempty"`
-	Title    string `json:"title,omitempty"`
+	PresetID    string `json:"preset_id,omitempty"`
+	URL         string `json:"url,omitempty"`
+	StreamURL   string `json:"stream_url,omitempty"`
+	Title       string `json:"title,omitempty"`
+	StationName string `json:"station_name,omitempty"`
 }
 
 type VolumeRequest struct {
@@ -152,11 +154,20 @@ func (s *Server) handleZoneAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch action {
-	case "play":
+	case "play", "preset":
 		var req PlayRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+
+		streamURL := req.URL
+		if streamURL == "" {
+			streamURL = req.StreamURL
+		}
+		title := req.Title
+		if title == "" {
+			title = req.StationName
 		}
 
 		if req.PresetID != "" {
@@ -164,13 +175,13 @@ func (s *Server) handleZoneAction(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-		} else if req.URL != "" {
-			if err := s.mgr.PlayZoneCustom(zoneID, req.URL, req.Title); err != nil {
+		} else if streamURL != "" {
+			if err := s.mgr.PlayZoneCustom(zoneID, streamURL, title); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 		} else {
-			http.Error(w, "Either preset_id or url required", http.StatusBadRequest)
+			http.Error(w, "Either preset_id or stream_url required", http.StatusBadRequest)
 			return
 		}
 
