@@ -140,6 +140,15 @@ The entrypoint script automatically:
 | POST | /api/stop-all | Stops playback on all zones simultaneously |
 | GET | /api/events | Server-Sent Events (SSE) stream for real-time state synchronization |
 
+## PTP Clock Synchronization & Embedded `usrvclock` Driver
+
+Dante Audio over IP requires high-precision PTPv1 clock synchronization (IEEE 1588-2002).
+
+To ensure rock-solid stability and zero startup latency, this project includes a native implementation of the **[usrvclock](https://gitlab.com/lumifaza/usrvclock)** protocol directly inside the Go stream engine ([`engine/usrvclock.go`](file:///e:/Git/tmpshit/dante/golang-inferno-player/engine/usrvclock.go)):
+
+- **Instant ALSA Startup:** Standard Inferno setups can hit 5-second ALSA startup timeouts waiting for external clock daemon sockets. The embedded Go `usrvclock` driver responds immediately (<0.1ms), preventing driver timeouts and audio stream resets.
+- **Continuous Phase Locking:** While Statime synchronizes the Linux system clock with the network's Dante Grandmaster, the embedded driver serves smooth, continuous clock overlays to the Inferno ALSA module, ensuring uninterrupted, dropout-free audio streaming.
+
 ## Upstream Projects and Dependencies
 
 This project relies on the following open source software:
@@ -148,3 +157,5 @@ This project relies on the following open source software:
 - Statime (PTPv1 fork for Dante clock synchronization): https://github.com/teodly/statime
 - Statime (Upstream Project Pendulum): https://github.com/pendulum-project/statime
 - FFmpeg (Audio stream decoding and format conversion): https://ffmpeg.org
+- usrvclock (Userspace Virtual Clock Protocol): https://gitlab.com/lumifaza/usrvclock
+
