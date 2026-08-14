@@ -1,6 +1,6 @@
 # ==============================================================================
 # Multi-Stage Dockerfile for Dante Audio Hub + Upstream Inferno + Statime
-# Build Context: golang-infero-player repo
+# Build Context: golang-inferno-player repo
 # Supports Multi-Arch: linux/amd64, linux/arm64 (Raspberry Pi 4/5)
 # ==============================================================================
 
@@ -16,21 +16,26 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/dante-player .
 # ------------------------------------------------------------------------------
 # Stage 2: Build Upstream Inferno ALSA Plugin & Statime (Rust)
 # ------------------------------------------------------------------------------
-FROM rust:1.80-slim-bookworm AS rust-builder
+FROM rust:1-slim-bookworm AS rust-builder
+
 RUN apt-get update && apt-get install -y \
     build-essential \
     pkg-config \
     libasound2-dev \
+    libssl-dev \
+    clang \
+    libclang-dev \
+    llvm-dev \
     git \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Build upstream Statime (PTPv1 clock daemon for Dante)
+# Build upstream Statime (PTP clock daemon for Dante)
 RUN git clone --recurse-submodules -b inferno-dev https://github.com/teodly/statime /tmp/statime && \
     cd /tmp/statime && \
     cargo build --release && \
     mkdir -p /out && \
-    cp target/release/statime /out/
+    (cp target/release/statime /out/ 2>/dev/null || cp target/release/statime-linux /out/statime 2>/dev/null || find target/release -maxdepth 1 -type f -executable -exec cp {} /out/statime \;)
 
 # Build pristine upstream Inferno ALSA virtual soundcard module
 RUN git clone --recurse-submodules -b dev https://github.com/teodly/inferno /build/inferno && \
