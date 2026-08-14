@@ -64,10 +64,10 @@ func (s *UsrvclockServer) makeFrame() []byte {
 		Major:     1,
 		Minor:     0,
 		Flags:     1, // 0x0001 (Valid clock overlay)
-		ClockID:   0, // 0 = CLOCK_REALTIME (matches PTP network epoch)
+		ClockID:   0, // 0 = CLOCK_REALTIME (smoothly follows system/PTP clock)
 		LastSync:  now,
-		Shift:     now,
-		FreqScale: 0.0,
+		Shift:     0,   // Fixed 0 offset ensures continuous monotonic time without clock jumps
+		FreqScale: 0.0, // System clock is already disciplined by Statime
 	}
 
 	buf := new(bytes.Buffer)
