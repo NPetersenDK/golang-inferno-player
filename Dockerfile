@@ -1,27 +1,29 @@
 # syntax=docker/dockerfile:1
 # ==============================================================================
-# Parallel Multi-Stage Fast Dockerfile for Dante Audio Hub (Inferno + Statime)
-# All builder stages run concurrently in parallel on native host CPU
+# Ultra-Fast Multi-Arch Dockerfile for Dante Audio Hub (Inferno + Statime)
+# Uses shared base layer, BuildKit cache mounts, and fast parallel codegen
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
-# Stage 1: Build Dante Web Player (Go - runs in ~2 seconds)
+# Stage 1: Build Dante Web Player (Go - runs in ~2s)
 # ------------------------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS go-builder
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum* ./
+RUN go mod download
 COPY . ./
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/dante-player .
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/dante-player .
 
 # ------------------------------------------------------------------------------
-# Stage 2A: Build Upstream Statime (PTPv1 Clock Daemon) in Parallel
+# Stage 2: Shared Rust Cross-Compilation Base (Apt runs only once!)
 # ------------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM rust:1-slim-bookworm AS statime-builder
+FROM --platform=$BUILDPLATFORM rust:1-slim-bookworm AS rust-base
 ARG TARGETARCH
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     pkg-config \
     libssl-dev \
@@ -30,21 +32,34 @@ RUN apt-get update && apt-get install -y \
     llvm-dev \
     git \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
+    && if [ "$TARGETARCH" = "arm64" ]; then \
       dpkg --add-architecture arm64 && \
       apt-get update && \
-      apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross && \
-      rustup target add aarch64-unknown-linux-gnu && \
-      rm -rf /var/lib/apt/lists/*; \
-    fi
+      apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross libasound2-dev:arm64 && \
+      rustup target add aarch64-unknown-linux-gnu; \
+    else \
+      apt-get install -y --no-install-recommends libasound2-dev; \
+    fi \
+    && rm -rf /var/lib/apt/lists/*
 
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
 ENV CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
 ENV CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+ENV PKG_CONFIG_PATH_aarch64_unknown_linux_gnu=/usr/lib/aarch64-linux-gnu/pkgconfig
+ENV PKG_CONFIG_ALLOW_CROSS=1
+# Speed up Cargo builds: 16 parallel codegen units and disable heavy whole-program LTO
+ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+ENV CARGO_PROFILE_RELEASE_LTO=off
 
-RUN git clone --depth 1 --recurse-submodules --shallow-submodules -b inferno-dev https://github.com/teodly/statime /tmp/statime && \
+# ------------------------------------------------------------------------------
+# Stage 3A: Build Upstream Statime (PTPv1 Clock Daemon)
+# ------------------------------------------------------------------------------
+FROM rust-base AS statime-builder
+ARG TARGETARCH
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    git clone --depth 1 --recurse-submodules --shallow-submodules -b inferno-dev https://github.com/teodly/statime /tmp/statime && \
     cd /tmp/statime && \
     if [ "$TARGETARCH" = "arm64" ]; then \
       cargo build --release --target=aarch64-unknown-linux-gnu; \
@@ -57,37 +72,14 @@ RUN git clone --depth 1 --recurse-submodules --shallow-submodules -b inferno-dev
     (cp $TARGET_DIR/statime /out/ 2>/dev/null || cp $TARGET_DIR/statime-linux /out/statime 2>/dev/null || find $TARGET_DIR -maxdepth 1 -type f -executable -exec cp {} /out/statime \;)
 
 # ------------------------------------------------------------------------------
-# Stage 2B: Build Upstream Inferno ALSA Module in Parallel
+# Stage 3B: Build Upstream Inferno ALSA Module
 # ------------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM rust:1-slim-bookworm AS inferno-builder
+FROM rust-base AS inferno-builder
 ARG TARGETARCH
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    pkg-config \
-    clang \
-    libclang-dev \
-    git \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      dpkg --add-architecture arm64 && \
-      apt-get update && \
-      apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross libasound2-dev:arm64 && \
-      rustup target add aarch64-unknown-linux-gnu && \
-      rm -rf /var/lib/apt/lists/*; \
-    else \
-      apt-get update && apt-get install -y libasound2-dev && rm -rf /var/lib/apt/lists/*; \
-    fi
-
-ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-ENV CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
-ENV CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
-ENV PKG_CONFIG_PATH_aarch64_unknown_linux_gnu=/usr/lib/aarch64-linux-gnu/pkgconfig
-ENV PKG_CONFIG_ALLOW_CROSS=1
-
-RUN git clone --depth 1 --recurse-submodules --shallow-submodules -b dev https://github.com/teodly/inferno /build/inferno && \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    git clone --depth 1 --recurse-submodules --shallow-submodules -b dev https://github.com/teodly/inferno /build/inferno && \
     cd /build/inferno && \
     if [ "$TARGETARCH" = "arm64" ]; then \
       RUSTFLAGS="-C target-feature=-crt-static" cargo build --release --target=aarch64-unknown-linux-gnu -p alsa_pcm_inferno && \
@@ -98,11 +90,11 @@ RUN git clone --depth 1 --recurse-submodules --shallow-submodules -b dev https:/
     fi
 
 # ------------------------------------------------------------------------------
-# Stage 3: Minimal Runtime Container
+# Stage 4: Minimal Runtime Container
 # ------------------------------------------------------------------------------
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     libasound2-plugins \
     alsa-utils \

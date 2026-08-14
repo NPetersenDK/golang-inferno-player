@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -55,11 +56,10 @@ func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
 }
 
 // masterDanteAudioLoop keeps a single continuous 8-channel 48kHz audio stream running into pcm.inferno.
-// This ensures Dante Controller routing is always locked and active.
 func (m *PlaybackManager) masterDanteAudioLoop() {
 	const (
-		sampleRate   = 48000
-		numChannels  = 8
+		sampleRate    = 48000
+		numChannels   = 8
 		framesPerTick = 960 // 20ms block
 		bytesPerTick  = framesPerTick * numChannels * 4
 	)
@@ -69,12 +69,24 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 	for {
 		log.Printf("[Dante Master] Starting continuous 8-channel Dante ALSA transmitter (pcm.inferno)...")
 
-		cmd := exec.Command("aplay", "-D", "inferno", "-t", "raw", "-f", "S32_LE", "-r", "48000", "-c", "8", "-q", "-")
+		// Launch aplay with 250ms buffer to prevent underruns
+		cmd := exec.Command("aplay", "-D", "inferno", "-t", "raw", "-f", "S32_LE", "-r", "48000", "-c", "8", "--buffer-time=250000", "-")
+		
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
-			log.Printf("[Dante Master] Notice: Could not open aplay pipe: %v. Running in emulation mode.", err)
+			log.Printf("[Dante Master] Notice: Could not open aplay stdin: %v. Running in emulation mode.", err)
 			m.emulateMasterLoop(framesPerTick)
 			continue
+		}
+
+		stderr, _ := cmd.StderrPipe()
+		if stderr != nil {
+			go func() {
+				scanner := bufio.NewScanner(stderr)
+				for scanner.Scan() {
+					log.Printf("[Inferno ALSA] %s", scanner.Text())
+				}
+			}()
 		}
 
 		if err := cmd.Start(); err != nil {
@@ -85,6 +97,11 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 		}
 
 		log.Printf("[Dante Master] Dante ALSA audio transmitter active (8 TX channels). Dante-Pi is now broadcasting.")
+
+		// Pre-fill ALSA buffer with 100ms of silence to ensure no initial underruns
+		for i := 0; i < 5; i++ {
+			_, _ = stdin.Write(masterBuf)
+		}
 
 		ticker := time.NewTicker(20 * time.Millisecond)
 		aplayAlive := true
