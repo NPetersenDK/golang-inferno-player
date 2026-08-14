@@ -1,27 +1,29 @@
+# syntax=docker/dockerfile:1
 # ==============================================================================
-# Multi-Stage Dockerfile for Dante Audio Hub + Upstream Inferno + Statime
-# Build Context: golang-inferno-player repo
-# Supports Multi-Arch: linux/amd64, linux/arm64 (Raspberry Pi 4/5)
+# Fast Multi-Arch Dockerfile for Dante Audio Hub + Upstream Inferno + Statime
+# Uses native cross-compilation (no slow QEMU emulation during compilation)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
-# Stage 1: Build Dante Web Player & Stream Engine (Go)
+# Stage 1: Build Dante Web Player (Go - Native cross-compilation in 2 seconds)
 # ------------------------------------------------------------------------------
-FROM golang:1.22-alpine AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS go-builder
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod ./
 COPY . ./
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/dante-player .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/dante-player .
 
 # ------------------------------------------------------------------------------
-# Stage 2: Build Upstream Inferno ALSA Plugin & Statime (Rust)
+# Stage 2: Build Upstream Inferno & Statime (Rust - Native cross-compilation)
 # ------------------------------------------------------------------------------
-FROM rust:1-slim-bookworm AS rust-builder
+FROM --platform=$BUILDPLATFORM rust:1-slim-bookworm AS rust-builder
+ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y \
     build-essential \
     pkg-config \
-    libasound2-dev \
     libssl-dev \
     clang \
     libclang-dev \
@@ -30,21 +32,49 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Build upstream Statime (PTP clock daemon for Dante)
-RUN git clone --recurse-submodules -b inferno-dev https://github.com/teodly/statime /tmp/statime && \
+# Install cross-compilation toolchain and libraries for ARM64
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+      dpkg --add-architecture arm64 && \
+      apt-get update && \
+      apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross libasound2-dev:arm64 && \
+      rustup target add aarch64-unknown-linux-gnu && \
+      rm -rf /var/lib/apt/lists/*; \
+    else \
+      apt-get update && apt-get install -y libasound2-dev && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+ENV CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+ENV CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+ENV PKG_CONFIG_PATH_aarch64_unknown_linux_gnu=/usr/lib/aarch64-linux-gnu/pkgconfig
+ENV PKG_CONFIG_ALLOW_CROSS=1
+
+# Build upstream Statime (shallow clone for speed)
+RUN git clone --depth 1 --recurse-submodules --shallow-submodules -b inferno-dev https://github.com/teodly/statime /tmp/statime && \
     cd /tmp/statime && \
-    cargo build --release && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+      cargo build --release --target=aarch64-unknown-linux-gnu; \
+      TARGET_DIR="target/aarch64-unknown-linux-gnu/release"; \
+    else \
+      cargo build --release; \
+      TARGET_DIR="target/release"; \
+    fi && \
     mkdir -p /out && \
-    (cp target/release/statime /out/ 2>/dev/null || cp target/release/statime-linux /out/statime 2>/dev/null || find target/release -maxdepth 1 -type f -executable -exec cp {} /out/statime \;)
+    (cp $TARGET_DIR/statime /out/ 2>/dev/null || cp $TARGET_DIR/statime-linux /out/statime 2>/dev/null || find $TARGET_DIR -maxdepth 1 -type f -executable -exec cp {} /out/statime \;)
 
 # Build pristine upstream Inferno ALSA virtual soundcard module
-RUN git clone --recurse-submodules -b dev https://github.com/teodly/inferno /build/inferno && \
+RUN git clone --depth 1 --recurse-submodules --shallow-submodules -b dev https://github.com/teodly/inferno /build/inferno && \
     cd /build/inferno && \
-    RUSTFLAGS="-C target-feature=-crt-static" cargo build --release -p alsa_pcm_inferno && \
-    cp target/release/libasound_module_pcm_inferno.so /out/
+    if [ "$TARGETARCH" = "arm64" ]; then \
+      RUSTFLAGS="-C target-feature=-crt-static" cargo build --release --target=aarch64-unknown-linux-gnu -p alsa_pcm_inferno && \
+      cp target/aarch64-unknown-linux-gnu/release/libasound_module_pcm_inferno.so /out/; \
+    else \
+      RUSTFLAGS="-C target-feature=-crt-static" cargo build --release -p alsa_pcm_inferno && \
+      cp target/release/libasound_module_pcm_inferno.so /out/; \
+    fi
 
 # ------------------------------------------------------------------------------
-# Stage 3: Minimal Runtime Container
+# Stage 3: Minimal Runtime Container (Target Architecture)
 # ------------------------------------------------------------------------------
 FROM debian:bookworm-slim
 

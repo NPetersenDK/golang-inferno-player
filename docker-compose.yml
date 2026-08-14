@@ -2,9 +2,7 @@ version: "3.8"
 
 services:
   dante-streamer:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/npetersendk/golang-inferno-player:latest
     container_name: dante-streamer
     restart: unless-stopped
     # Host networking gives direct access to the USB Dante adapter, multicast & PTP clock
