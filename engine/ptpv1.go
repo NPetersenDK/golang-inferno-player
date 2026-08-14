@@ -364,8 +364,17 @@ func (m *PTPMonitor) refit() {
 
 	m.fitT0, m.fitA, m.fitB = t0, a, b
 	if !m.locked {
+		// Log the raw timestamps too, not just the difference: a Dante
+		// grandmaster runs a free-running counter rather than wall time, and
+		// seeing its absolute value is the only way to tell a correct reading
+		// from a misparsed one.
+		last := m.samples[n-1]
+		masterNs := last.localNs + last.offsetNs
 		log.Printf("[PTP] locked to %s: offset %.3f ms, drift %.2f ppm (%d samples)",
 			m.masterID, a/1e6, b/1000.0, n)
+		log.Printf("[PTP] grandmaster clock reads %d.%09d s, local CLOCK_REALTIME %d.%09d s",
+			masterNs/1_000_000_000, masterNs%1_000_000_000,
+			last.localNs/1_000_000_000, last.localNs%1_000_000_000)
 	}
 	m.locked = true
 }
@@ -478,6 +487,11 @@ type ClockDiscipline struct {
 	stepNs     int64
 	maxSlewPPM float64
 
+	// Closed once the grandmaster has been measured for the first time, so the
+	// audio pipeline can hold off until the big initial step is behind it.
+	acquiredCh   chan struct{}
+	acquiredOnce sync.Once
+
 	stopChan chan struct{}
 }
 
@@ -491,6 +505,7 @@ func StartClockDiscipline(ptp *PTPMonitor) *ClockDiscipline {
 		stepNs:     envMillisToNs("DANTE_PTP_STEP_MS", 5),
 		maxSlewPPM: envFloat("DANTE_PTP_MAX_SLEW_PPM", 500),
 		lastTick:   time.Now(),
+		acquiredCh: make(chan struct{}),
 		stopChan:   make(chan struct{}),
 	}
 	d.shiftNs = d.staticNs
@@ -521,6 +536,27 @@ func (d *ClockDiscipline) Locked() bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.acquired
+}
+
+// WaitForLock blocks until the grandmaster has been measured for the first
+// time, reporting whether that happened before the timeout.
+//
+// The first measurement moves the media clock by whatever the grandmaster's
+// epoch happens to be. A Dante master runs a free-running counter rather than
+// wall time, so that step is years wide: Inferno logs "media clock jumped",
+// rebootstraps every flow and drops the ALSA stream. Callers use this to make
+// sure the step lands before anything is transmitting.
+func (d *ClockDiscipline) WaitForLock(timeout time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-d.acquiredCh:
+		return true
+	case <-d.stopChan:
+		return false
+	case <-timer.C:
+		return false
+	}
 }
 
 func (d *ClockDiscipline) run() {
@@ -572,6 +608,7 @@ func (d *ClockDiscipline) applyEstimate(target int64, freq float64, now time.Tim
 		}
 		d.shiftNs = target
 		d.acquired = true
+		d.acquiredOnce.Do(func() { close(d.acquiredCh) })
 		return
 	}
 

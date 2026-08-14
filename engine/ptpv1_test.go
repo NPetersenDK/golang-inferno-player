@@ -143,6 +143,8 @@ func TestDisciplineSlewIsRateLimited(t *testing.T) {
 		lastTick:   time.Now().Add(-100 * time.Millisecond),
 		acquired:   true,
 		shiftNs:    665 * 1e6,
+		acquiredCh: make(chan struct{}),
+		stopChan:   make(chan struct{}),
 	}
 	// 1 ms of error is below the step threshold, so it must be slewed.
 	target := d.shiftNs + 1_000_000
@@ -154,6 +156,35 @@ func TestDisciplineSlewIsRateLimited(t *testing.T) {
 	}
 }
 
+// The audio pipeline gates on this: it must not release before the first
+// measurement, and it must not block forever on a network without PTP.
+func TestWaitForLockReleasesOnAcquire(t *testing.T) {
+	d := &ClockDiscipline{
+		staticNs:   665 * 1e6,
+		stepNs:     5 * 1e6,
+		maxSlewPPM: 500,
+		lastTick:   time.Now(),
+		acquiredCh: make(chan struct{}),
+		stopChan:   make(chan struct{}),
+	}
+
+	if d.WaitForLock(10 * time.Millisecond) {
+		t.Fatal("WaitForLock reported a lock before any measurement arrived")
+	}
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		d.applyEstimate(-1_785_713_638_806_000_000, 22.4e-6, time.Now())
+	}()
+
+	if !d.WaitForLock(2 * time.Second) {
+		t.Fatal("WaitForLock did not release after the grandmaster was acquired")
+	}
+	if shift, _ := d.Overlay(); shift != -1_785_713_638_806_000_000 {
+		t.Errorf("shift %d, want the acquired value stepped in directly", shift)
+	}
+}
+
 func TestDisciplineStepsOnLargeError(t *testing.T) {
 	d := &ClockDiscipline{
 		staticNs:   665 * 1e6,
@@ -162,6 +193,8 @@ func TestDisciplineStepsOnLargeError(t *testing.T) {
 		lastTick:   time.Now().Add(-100 * time.Millisecond),
 		acquired:   true,
 		shiftNs:    665 * 1e6,
+		acquiredCh: make(chan struct{}),
+		stopChan:   make(chan struct{}),
 	}
 	target := d.shiftNs + 40*1e6
 	d.applyEstimate(target, 0, time.Now())

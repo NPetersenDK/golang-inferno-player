@@ -9,6 +9,12 @@ let currentCategory = "all";
 let searchQuery = "";
 let sseSource = null;
 
+// Zone cards are built once and then updated in place. Rebuilding them on every
+// state event replaces the element under the pointer, which makes buttons jump,
+// the cursor flicker and a volume drag snap back mid-gesture.
+const zoneNodes = new Map();
+let zoneDropdownSignature = "";
+
 // DOM Elements
 const zonesList = document.getElementById("zonesList");
 const stationsGrid = document.getElementById("stationsGrid");
@@ -118,13 +124,21 @@ function updateHeader() {
 function syncZoneDropdowns() {
   if (!systemState.zones || systemState.zones.length === 0) return;
 
-  const currentVal = targetZoneSelect.value;
-  const zoneOptions = systemState.zones.map(z => 
-    `<option value="${z.id}" ${z.id === activeZoneId ? "selected" : ""}>${escapeHtml(z.name || `Zone ${z.id}`)}</option>`
-  ).join("");
+  // Only touch the selects when the zone list itself changes. Rewriting their
+  // options on every update closes an open dropdown while you are using it.
+  const signature = systemState.zones.map(z => `${z.id}:${z.name || ""}`).join("|");
+  if (signature !== zoneDropdownSignature) {
+    zoneDropdownSignature = signature;
+    const zoneOptions = systemState.zones.map(z =>
+      `<option value="${z.id}">${escapeHtml(z.name || `Zone ${z.id}`)}</option>`
+    ).join("");
+    targetZoneSelect.innerHTML = zoneOptions;
+    modalZoneSelect.innerHTML = zoneOptions;
+  }
 
-  targetZoneSelect.innerHTML = zoneOptions;
-  modalZoneSelect.innerHTML = zoneOptions;
+  if (targetZoneSelect.value !== String(activeZoneId)) {
+    targetZoneSelect.value = String(activeZoneId);
+  }
 }
 
 function renderCategoryPills() {
@@ -147,96 +161,160 @@ function renderZones() {
   if (!systemState.zones || systemState.zones.length === 0) return;
 
   syncZoneDropdowns();
-  zonesList.innerHTML = "";
 
-  systemState.zones.forEach(zone => {
-    const isPlaying = (zone.status === "playing");
-    const isBuffering = (zone.status === "buffering");
-    const isSelected = (zone.id === activeZoneId);
-
-    const peakLPct = Math.min(100, Math.round((zone.peak_left || 0) * 100));
-    const peakRPct = Math.min(100, Math.round((zone.peak_right || 0) * 100));
-
-    const item = document.createElement("div");
-    item.className = `zone-item ${isSelected ? "active-zone" : ""} ${isPlaying ? "playing-zone" : ""}`;
-
-    item.innerHTML = `
-      <div class="d-flex justify-content-between align-items-center mb-1">
-        <div>
-          <span class="fw-semibold small">${escapeHtml(zone.name)}</span>
-          <span class="text-muted d-block" style="font-size: 0.7rem;">${escapeHtml(zone.dante_left || '')} / ${escapeHtml(zone.dante_right || '')}</span>
-        </div>
-        <div>
-          ${isPlaying ? '<span class="badge text-bg-success"><i class="fa-solid fa-play fa-xs me-1"></i>Playing</span>' :
-            isBuffering ? '<span class="badge text-bg-warning"><i class="fa-solid fa-spinner fa-spin fa-xs me-1"></i>Buffering</span>' :
-            '<span class="badge text-bg-secondary">Idle</span>'}
-        </div>
-      </div>
-
-      <div class="small text-truncate mb-2 text-secondary" style="font-size: 0.75rem;">
-        <i class="fa-solid fa-music me-1"></i> ${zone.station_name ? escapeHtml(zone.station_name) : 'Digital silence (ready for playback)'}
-      </div>
-
-      <!-- Peak Meter Bars -->
-      <div class="d-flex flex-column gap-1 mb-2">
-        <div class="d-flex align-items-center gap-1">
-          <span style="font-size: 0.65rem; width: 8px;" class="text-muted">L</span>
-          <div class="vu-meter-bar flex-grow-1">
-            <div class="vu-meter-fill" style="width: ${isPlaying ? peakLPct : 0}%;"></div>
-          </div>
-        </div>
-        <div class="d-flex align-items-center gap-1">
-          <span style="font-size: 0.65rem; width: 8px;" class="text-muted">R</span>
-          <div class="vu-meter-bar flex-grow-1">
-            <div class="vu-meter-fill" style="width: ${isPlaying ? peakRPct : 0}%;"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Volume & Stop Controls -->
-      <div class="d-flex align-items-center gap-2">
-        <button class="btn btn-sm btn-outline-secondary py-0 px-2 btn-mute" title="${zone.muted ? 'Unmute' : 'Mute'}">
-          <i class="fa-solid ${zone.muted || zone.volume === 0 ? 'fa-volume-xmark text-danger' : 'fa-volume-high'}"></i>
-        </button>
-
-        <input type="range" class="form-range flex-grow-1 vol-slider" min="0" max="100" value="${zone.volume}" title="Volume: ${zone.volume}%"/>
-
-        <span class="small text-muted text-end" style="width: 32px; font-size: 0.75rem;">${zone.volume}%</span>
-
-        <button class="btn btn-sm btn-outline-danger py-0 px-2 btn-stop" title="Stop Zone" ${!isPlaying && !isBuffering ? "disabled" : ""}>
-          <i class="fa-solid fa-stop"></i>
-        </button>
-      </div>
-    `;
-
-    // Event Handlers
-    item.querySelector(".btn-mute").addEventListener("click", () => {
-      fetch(`/api/zones/${zone.id}/mute`, { method: "POST" });
-    });
-
-    item.querySelector(".btn-stop").addEventListener("click", () => {
-      fetch(`/api/zones/${zone.id}/stop`, { method: "POST" });
-    });
-
-    const volSlider = item.querySelector(".vol-slider");
-    volSlider.addEventListener("input", (e) => {
-      const vol = parseInt(e.target.value, 10);
-      fetch(`/api/zones/${zone.id}/volume`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ volume: vol })
-      });
-    });
-
-    item.addEventListener("click", (e) => {
-      if (e.target.tagName === "BUTTON" || e.target.tagName === "INPUT" || e.target.closest("button")) return;
-      activeZoneId = zone.id;
-      targetZoneSelect.value = zone.id;
-      renderZones();
-    });
-
-    zonesList.appendChild(item);
+  systemState.zones.forEach((zone, index) => {
+    let refs = zoneNodes.get(zone.id);
+    if (!refs) {
+      refs = createZoneNode(zone);
+      zoneNodes.set(zone.id, refs);
+    }
+    if (zonesList.children[index] !== refs.root) {
+      zonesList.insertBefore(refs.root, zonesList.children[index] || null);
+    }
+    updateZoneNode(refs, zone);
   });
+
+  const liveIds = new Set(systemState.zones.map(z => z.id));
+  zoneNodes.forEach((refs, id) => {
+    if (!liveIds.has(id)) {
+      refs.root.remove();
+      zoneNodes.delete(id);
+    }
+  });
+}
+
+function createZoneNode(zone) {
+  const root = document.createElement("div");
+  root.className = "zone-item";
+  root.innerHTML = `
+    <div class="d-flex justify-content-between align-items-center mb-1">
+      <div>
+        <span class="fw-semibold small js-name"></span>
+        <span class="text-muted d-block js-channels" style="font-size: 0.7rem;"></span>
+      </div>
+      <div class="js-badge"></div>
+    </div>
+
+    <div class="small text-truncate mb-2 text-secondary" style="font-size: 0.75rem;">
+      <i class="fa-solid fa-music me-1"></i> <span class="js-station"></span>
+    </div>
+
+    <!-- Peak Meter Bars -->
+    <div class="d-flex flex-column gap-1 mb-2">
+      <div class="d-flex align-items-center gap-1">
+        <span style="font-size: 0.65rem; width: 8px;" class="text-muted">L</span>
+        <div class="vu-meter-bar flex-grow-1"><div class="vu-meter-fill js-vu-l" style="width: 0%;"></div></div>
+      </div>
+      <div class="d-flex align-items-center gap-1">
+        <span style="font-size: 0.65rem; width: 8px;" class="text-muted">R</span>
+        <div class="vu-meter-bar flex-grow-1"><div class="vu-meter-fill js-vu-r" style="width: 0%;"></div></div>
+      </div>
+    </div>
+
+    <!-- Volume & Stop Controls -->
+    <div class="d-flex align-items-center gap-2">
+      <button class="btn btn-sm btn-outline-secondary py-0 px-2 btn-mute">
+        <i class="fa-solid js-mute-icon"></i>
+      </button>
+      <input type="range" class="form-range flex-grow-1 vol-slider" min="0" max="100" value="${zone.volume}"/>
+      <span class="small text-muted text-end js-vol-text" style="width: 32px; font-size: 0.75rem;"></span>
+      <button class="btn btn-sm btn-outline-danger py-0 px-2 btn-stop" title="Stop Zone">
+        <i class="fa-solid fa-stop"></i>
+      </button>
+    </div>
+  `;
+
+  const refs = {
+    root,
+    name: root.querySelector(".js-name"),
+    channels: root.querySelector(".js-channels"),
+    badge: root.querySelector(".js-badge"),
+    station: root.querySelector(".js-station"),
+    vuL: root.querySelector(".js-vu-l"),
+    vuR: root.querySelector(".js-vu-r"),
+    muteBtn: root.querySelector(".btn-mute"),
+    muteIcon: root.querySelector(".js-mute-icon"),
+    slider: root.querySelector(".vol-slider"),
+    volText: root.querySelector(".js-vol-text"),
+    stopBtn: root.querySelector(".btn-stop"),
+    lastStatus: null,
+    dragging: false
+  };
+
+  refs.muteBtn.addEventListener("click", () => {
+    fetch(`/api/zones/${zone.id}/mute`, { method: "POST" });
+  });
+
+  refs.stopBtn.addEventListener("click", () => {
+    fetch(`/api/zones/${zone.id}/stop`, { method: "POST" });
+  });
+
+  // Track the drag so an incoming state event cannot yank the slider away
+  // mid-gesture.
+  refs.slider.addEventListener("pointerdown", () => { refs.dragging = true; });
+  refs.slider.addEventListener("pointerup", () => { refs.dragging = false; });
+  refs.slider.addEventListener("blur", () => { refs.dragging = false; });
+  refs.slider.addEventListener("input", (e) => {
+    const vol = parseInt(e.target.value, 10);
+    refs.volText.textContent = `${vol}%`;
+    fetch(`/api/zones/${zone.id}/volume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ volume: vol })
+    });
+  });
+
+  root.addEventListener("click", (e) => {
+    if (e.target.tagName === "BUTTON" || e.target.tagName === "INPUT" || e.target.closest("button")) return;
+    activeZoneId = zone.id;
+    targetZoneSelect.value = zone.id;
+    renderZones();
+  });
+
+  return refs;
+}
+
+function updateZoneNode(refs, zone) {
+  const isPlaying = (zone.status === "playing");
+  const isBuffering = (zone.status === "buffering");
+
+  refs.root.classList.toggle("active-zone", zone.id === activeZoneId);
+  refs.root.classList.toggle("playing-zone", isPlaying);
+
+  setText(refs.name, zone.name || "");
+  setText(refs.channels, `${zone.dante_left || ""} / ${zone.dante_right || ""}`);
+  setText(refs.station, zone.station_name || "Digital silence (ready for playback)");
+
+  if (zone.status !== refs.lastStatus) {
+    refs.lastStatus = zone.status;
+    refs.badge.innerHTML = isPlaying
+      ? '<span class="badge text-bg-success"><i class="fa-solid fa-play fa-xs me-1"></i>Playing</span>'
+      : isBuffering
+        ? '<span class="badge text-bg-warning"><i class="fa-solid fa-spinner fa-spin fa-xs me-1"></i>Buffering</span>'
+        : '<span class="badge text-bg-secondary">Idle</span>';
+  }
+
+  const peakLPct = isPlaying ? Math.min(100, Math.round((zone.peak_left || 0) * 100)) : 0;
+  const peakRPct = isPlaying ? Math.min(100, Math.round((zone.peak_right || 0) * 100)) : 0;
+  refs.vuL.style.width = `${peakLPct}%`;
+  refs.vuR.style.width = `${peakRPct}%`;
+
+  const muted = zone.muted || zone.volume === 0;
+  refs.muteBtn.title = zone.muted ? "Unmute" : "Mute";
+  refs.muteIcon.className = `fa-solid js-mute-icon ${muted ? "fa-volume-xmark text-danger" : "fa-volume-high"}`;
+
+  if (!refs.dragging && document.activeElement !== refs.slider) {
+    if (refs.slider.value !== String(zone.volume)) refs.slider.value = zone.volume;
+    setText(refs.volText, `${zone.volume}%`);
+  }
+  refs.slider.title = `Volume: ${zone.volume}%`;
+
+  const canStop = isPlaying || isBuffering;
+  if (refs.stopBtn.disabled === canStop) refs.stopBtn.disabled = !canStop;
+}
+
+function setText(el, value) {
+  if (el.textContent !== value) el.textContent = value;
 }
 
 function renderStations() {
