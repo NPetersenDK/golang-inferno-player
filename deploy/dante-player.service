@@ -1,0 +1,14 @@
+[Unit]
+Description=Dante Web Player & Stream Engine (Go)
+After=network.target inferno-dante.service
+Wants=inferno-dante.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/dante-player
+ExecStart=/usr/local/bin/dante-player -port 8080 -pipe-dir /tmp/dante_player -dante-name Dante-Pi
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

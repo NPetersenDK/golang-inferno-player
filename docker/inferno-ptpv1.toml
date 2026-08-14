@@ -1,0 +1,11 @@
+# Statime PTP configuration for Dante synchronization in Docker
+[network]
+interface = "eth0"
+
+[clock]
+hardware-clock = "none"
+virtual-system-clock-base = "monotonic"
+
+[ptp]
+version = "v1"
+domain = 0

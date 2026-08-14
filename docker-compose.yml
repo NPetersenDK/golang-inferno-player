@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  dante-streamer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dante-streamer
+    restart: unless-stopped
+    # Host networking is required for Dante mDNS discovery, UDP RTP multicast, and PTP clock
+    network_mode: host
+    environment:
+      - INFERNO_NAME=Dante-Pi
+      - INFERNO_TX_CHANNELS=8
+      - INFERNO_SAMPLE_RATE=48000
+      - HTTP_PORT=8080
+      - DANTE_INTERFACE=eth0 # Change to your Pi's network interface (e.g. eth0, end0, wlan0)
+    cap_add:
+      - SYS_TIME
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    ulimits:
+      rtprio: 95
+      memlock: -1
+    volumes:
+      # Persistent storage for Dante Device State (so Dante Controller routing is never lost)
+      - dante_state:/root/.local/state/inferno_aoip
+      # Persistent storage for web player presets & custom configuration
+      - player_data:/opt/dante-player/data
+      # Shared memory for low-latency audio buffering
+      - /dev/shm:/dev/shm
+
+volumes:
+  dante_state:
+    name: dante_pi_state
+  player_data:
+    name: dante_player_data

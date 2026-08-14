@@ -1,0 +1,16 @@
+# Statime PTPv1 configuration for Dante synchronization
+# Adjust the network interface (e.g. eth0, end0, wlan0) to match your Raspberry Pi
+
+[network]
+interface = "eth0"
+
+[clock]
+# Use auto or hardware-clock if supported, otherwise software
+hardware-clock = "none"
+# Monotonic clock prevents time jumping when NTP updates
+virtual-system-clock-base = "monotonic"
+
+[ptp]
+# PTPv1 is standard for Dante networks without AES67
+version = "v1"
+domain = 0

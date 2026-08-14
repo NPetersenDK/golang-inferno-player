@@ -1,0 +1,19 @@
+[Unit]
+Description=Inferno Dante Multi-Channel Transmitter Daemon
+After=network.target statime.service
+Wants=statime.service
+
+[Service]
+Type=simple
+Environment="RUST_LOG=info"
+Environment="INFERNO_NAME=Dante-Pi"
+Environment="INFERNO_TX_CHANNELS=8"
+Environment="INFERNO_SAMPLE_RATE=48000"
+ExecStart=/usr/local/bin/inferno_player --name Dante-Pi --channels 8 --sample-rate 48000 --pipe-dir /tmp/dante_player
+Restart=always
+RestartSec=3
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target

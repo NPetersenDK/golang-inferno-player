@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dante Streamer | Raspberry Pi Audio Hub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- TOP HEADER -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <div class="brand-title">DANTE AUDIO HUB</div>
+          <div class="brand-subtitle">Raspberry Pi AoIP Player via Inferno</div>
+        </div>
+      </div>
+
+      <div class="dante-status-panel">
+        <div class="status-badge" id="danteDeviceBadge">
+          <span class="status-dot dot-emerald"></span>
+          <span class="badge-label">Device:</span>
+          <strong id="danteDeviceName">Dante-Pi</strong>
+        </div>
+        <div class="status-badge" id="danteClockBadge">
+          <span class="status-dot dot-emerald pulse"></span>
+          <span class="badge-label">Clock:</span>
+          <strong id="danteClockText">PTP 48kHz Synced</strong>
+        </div>
+        <div class="status-badge" id="danteRoutingBadge">
+          <span class="status-dot dot-blue"></span>
+          <span class="badge-label">Dante Flows:</span>
+          <strong id="danteFlowsText">Persistent (8 Ch)</strong>
+        </div>
+      </div>
+    </header>
+
+    <!-- HERO ACTION BAR -->
+    <section class="hero-bar">
+      <div class="hero-left">
+        <div class="dr-p3-quick-card">
+          <div class="dr-logo-badge">DR P3</div>
+          <div class="dr-quick-info">
+            <h3>Danmarks Radio P3</h3>
+            <p>De største hits, ny musik & live underholdning</p>
+          </div>
+          <button class="btn btn-primary btn-quick-p3" id="quickP3Btn">
+            <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+            Play DR P3
+          </button>
+        </div>
+      </div>
+
+      <div class="hero-actions">
+        <button class="btn btn-secondary" id="openCustomUrlBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+          Custom Stream URL
+        </button>
+        <button class="btn btn-danger-outline" id="stopAllBtn">
+          <svg viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>
+          Stop All Zones
+        </button>
+      </div>
+    </section>
+
+    <!-- MAIN CONTENT LAYOUT: ZONES + PRESETS -->
+    <main class="main-content">
+      <!-- LEFT COLUMN: AUDIO ZONES -->
+      <section class="zones-section">
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <h2>Dante Output Zones</h2>
+            <span class="section-desc">Independent stereo audio streams routed to fixed Dante channels</span>
+          </div>
+          <div class="target-zone-selector">
+            <label for="activeZoneSelect">Active Control Zone:</label>
+            <select id="activeZoneSelect" class="select-dropdown">
+              <option value="1">Zone 1 (Main / Stue)</option>
+              <option value="2">Zone 2 (Køkken)</option>
+              <option value="3">Zone 3 (Kontor)</option>
+              <option value="4">Zone 4 (Værksted / Altan)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="zones-grid" id="zonesContainer">
+          <!-- Dynamically populated zone cards -->
+        </div>
+      </section>
+
+      <!-- RIGHT COLUMN: STATIONS & PRESETS BROWSER -->
+      <section class="stations-section">
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <h2>Radio Stations & Streams</h2>
+            <span class="section-desc">Click any station to stream directly over Dante</span>
+          </div>
+          <div class="search-box">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="text" id="stationSearchInput" placeholder="Search DR P3, Rock, BBC, Jazz...">
+          </div>
+        </div>
+
+        <div class="category-tabs" id="categoryTabs">
+          <button class="tab-btn active" data-category="all">All</button>
+          <button class="tab-btn" data-category="Danish Public Radio">Danmarks Radio (DR)</button>
+          <button class="tab-btn" data-category="Pop & Hits">Pop & Hits</button>
+          <button class="tab-btn" data-category="Rock & Alternative">Rock</button>
+          <button class="tab-btn" data-category="News & Talk">News & Talk</button>
+          <button class="tab-btn" data-category="International">International</button>
+          <button class="tab-btn" data-category="custom">Custom</button>
+        </div>
+
+        <div class="stations-grid" id="stationsContainer">
+          <!-- Dynamically populated radio stations -->
+        </div>
+      </section>
+    </main>
+
+    <!-- FOOTER / ROUTING INFO -->
+    <footer class="app-footer">
+      <div class="footer-info">
+        <span class="dante-pill">Dante Architecture</span>
+        <p>Inferno daemon outputs continuous 48kHz audio into Dante network. Device ID and Channel mappings remain constant so Dante Controller routing stays 100% stable across track switches and pauses.</p>
+      </div>
+      <div class="footer-meta">
+        <span>Sample Rate: <strong>48,000 Hz (24/32-bit PCM)</strong></span>
+        <span>Clock: <strong>PTPv1 / PTPv2 (Statime)</strong></span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- CUSTOM URL MODAL -->
+  <div class="modal-overlay" id="customUrlModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Play Custom Audio Stream</h3>
+        <button class="modal-close" id="closeModalBtn">&times;</button>
+      </div>
+      <form id="customStreamForm">
+        <div class="form-group">
+          <label for="customStationName">Station / Stream Name</label>
+          <input type="text" id="customStationName" placeholder="e.g. My Custom Stream" required>
+        </div>
+        <div class="form-group">
+          <label for="customStreamUrl">Stream URL (HLS .m3u8, AAC, MP3, Icecast)</label>
+          <input type="url" id="customStreamUrl" placeholder="https://example.com/stream.mp3" required>
+        </div>
+        <div class="form-group">
+          <label for="customCategory">Category</label>
+          <select id="customCategory" class="select-dropdown">
+            <option value="Custom">Custom</option>
+            <option value="Pop & Hits">Pop & Hits</option>
+            <option value="Rock & Alternative">Rock & Alternative</option>
+            <option value="News & Talk">News & Talk</option>
+            <option value="Ambient & Jazz">Ambient & Jazz</option>
+          </select>
+        </div>
+        <div class="form-group-checkbox">
+          <label>
+            <input type="checkbox" id="saveAsPresetCheck" checked>
+            Save to station presets list
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="cancelModalBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Play on Active Zone</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
