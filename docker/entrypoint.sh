@@ -59,7 +59,18 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
+# Give Statime time to lock onto Dante Grandmaster and create usrvclock socket
+echo "[PTP] Waiting for Statime PTP socket to initialize..."
+for i in $(seq 1 10); do
+    if [ -S /tmp/usrvclock ]; then
+        echo "[PTP] Statime PTP clock socket is ready."
+        sleep 2
+        break
+    fi
+    sleep 1
+done
+
 # 4. Start Go Dante Web Player
 echo "[Web Player] Starting Dante Web Player on port ${HTTP_PORT:-8085}..."
-sleep 3
 exec dante-player -port "${HTTP_PORT:-8085}" -pipe-dir /tmp/dante_player -dante-name "${INFERNO_NAME:-Dante-Pi}" -config "/opt/dante-player/config.yaml"
+

@@ -32,8 +32,14 @@ type UsrvclockServer struct {
 	stopChan   chan struct{}
 }
 
-// StartUsrvclockServer binds a Unix datagram socket and continuously serves ClockOverlays to Inferno.
+// StartUsrvclockServer binds a Unix datagram socket and continuously serves ClockOverlays to Inferno if Statime is not exporting it.
 func StartUsrvclockServer(socketPath string) (*UsrvclockServer, error) {
+	// If Statime is already actively providing the PTP usrvclock socket, let Statime manage it
+	if fi, err := os.Stat(socketPath); err == nil && (fi.Mode()&os.ModeSocket != 0) {
+		log.Printf("[Clock Server] Statime PTP usrvclock socket active at %s", socketPath)
+		return nil, nil
+	}
+
 	_ = os.Remove(socketPath)
 
 	addr := &net.UnixAddr{Name: socketPath, Net: "unixgram"}

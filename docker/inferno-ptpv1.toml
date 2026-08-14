@@ -6,7 +6,7 @@ priority1 = 255
 priority2 = 255
 virtual-system-clock = true
 virtual-system-clock-base = "monotonic"
-usrvclock-export = false
+usrvclock-export = true
 usrvclock-path = "/tmp/usrvclock"
 
 [[port]]
