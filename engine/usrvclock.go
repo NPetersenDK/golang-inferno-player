@@ -58,14 +58,15 @@ func StartUsrvclockServer(socketPath string) (*UsrvclockServer, error) {
 }
 
 func (s *UsrvclockServer) makeFrame() []byte {
+	now := time.Now().UnixNano()
 	frame := UsrvclockFrame{
 		Magic:     [2]byte{'V', 'C'},
 		Major:     1,
 		Minor:     0,
 		Flags:     1, // 0x0001 (Valid clock overlay)
-		ClockID:   4, // CLOCK_MONOTONIC_RAW (or 1: CLOCK_MONOTONIC)
-		LastSync:  time.Now().UnixNano(),
-		Shift:     0,
+		ClockID:   0, // 0 = CLOCK_REALTIME (matches PTP network epoch)
+		LastSync:  now,
+		Shift:     now,
 		FreqScale: 0.0,
 	}
 
