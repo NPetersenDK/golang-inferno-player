@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"dante-player/api"
@@ -34,6 +35,11 @@ func main() {
 		cfg = config.DefaultConfig()
 	}
 
+	if envPort := os.Getenv("HTTP_PORT"); envPort != "" {
+		if p, err := strconv.Atoi(envPort); err == nil && p > 0 {
+			cfg.HTTPPort = p
+		}
+	}
 	if *httpPort != 8080 || cfg.HTTPPort == 0 {
 		cfg.HTTPPort = *httpPort
 	}
