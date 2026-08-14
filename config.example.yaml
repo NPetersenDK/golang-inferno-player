@@ -1,0 +1,91 @@
+# ==============================================================================
+# Dante Audio Hub - Example Configuration
+# Copy this file to config.yaml and customize for your setup:
+#   cp config.example.yaml config.yaml
+# ==============================================================================
+
+# Dante Device Name (advertised in Dante Controller)
+dante_name: "Dante-Pi"
+
+# Web Management Interface Port
+http_port: 8085
+
+# Native Dante Sample Rate (standard is 48000 Hz)
+sample_rate: 48000
+
+# Directory for audio FIFO pipes (internal)
+pipe_dir: "/tmp/dante_player"
+
+# ------------------------------------------------------------------------------
+# Dante Output Zones (maps each zone to Dante TX channel pairs)
+# ------------------------------------------------------------------------------
+zones:
+  - id: 1
+    name: "Zone 1 (Living Room)"
+    dante_left: "Zone 1 L (Ch 1)"
+    dante_right: "Zone 1 R (Ch 2)"
+    pipe_path: "/tmp/dante_player/zone_1.pcm"
+
+  - id: 2
+    name: "Zone 2 (Kitchen)"
+    dante_left: "Zone 2 L (Ch 3)"
+    dante_right: "Zone 2 R (Ch 4)"
+    pipe_path: "/tmp/dante_player/zone_2.pcm"
+
+  - id: 3
+    name: "Zone 3 (Office)"
+    dante_left: "Zone 3 L (Ch 5)"
+    dante_right: "Zone 3 R (Ch 6)"
+    pipe_path: "/tmp/dante_player/zone_3.pcm"
+
+  - id: 4
+    name: "Zone 4 (Balcony / Workshop)"
+    dante_left: "Zone 4 L (Ch 7)"
+    dante_right: "Zone 4 R (Ch 8)"
+    pipe_path: "/tmp/dante_player/zone_4.pcm"
+
+# ------------------------------------------------------------------------------
+# Radio Stations & Audio Streams
+# ------------------------------------------------------------------------------
+stations:
+  - id: "dr-p3"
+    name: "DR P3"
+    category: "Danish Public Radio"
+    stream_url: "https://drstream.akamaized.net/live/p3/s/p3_hls.m3u8"
+    description: "Danmarks største ungdoms- og musikkanal"
+
+  - id: "dr-p1"
+    name: "DR P1"
+    category: "Danish Public Radio"
+    stream_url: "https://drstream.akamaized.net/live/p1/s/p1_hls.m3u8"
+    description: "Nyheder, debat og samfund"
+
+  - id: "dr-p2"
+    name: "DR P2 Klassisk"
+    category: "Danish Public Radio"
+    stream_url: "https://drstream.akamaized.net/live/p2/s/p2_hls.m3u8"
+    description: "Klassisk musik og koncerter"
+
+  - id: "nova-fm"
+    name: "Nova FM"
+    category: "Pop & Hits"
+    stream_url: "https://stream.bauermedia.dk/nova128"
+    description: "De største hits"
+
+  - id: "the-voice"
+    name: "The Voice"
+    category: "Pop & Hits"
+    stream_url: "https://stream.bauermedia.dk/voice128"
+    description: "Danmarks Hitstation"
+
+  - id: "bbc-radio-1"
+    name: "BBC Radio 1"
+    category: "International"
+    stream_url: "https://stream.live.vc.bbcmedia.co.uk/bbc_radio_one"
+    description: "Pop and contemporary hits"
+
+  - id: "somafm-groove"
+    name: "SomaFM Groove Salad"
+    category: "Ambient / Chillout"
+    stream_url: "https://ice6.somafm.com/groovesalad-256-mp3"
+    description: "Downtempo electronic beats"

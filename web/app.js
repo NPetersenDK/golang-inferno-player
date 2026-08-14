@@ -288,7 +288,8 @@ function renderStations() {
   if (filtered.length === 0) {
     stationsContainer.innerHTML = `
       <div style="grid-column: 1 / -1; padding: 40px; text-align: center; color: var(--text-dim);">
-        No stations found matching your search.
+        <p style="font-size: 16px; margin-bottom: 8px;">No stations found.</p>
+        <p style="font-size: 13px; opacity: 0.8;">Add your custom stations to <code>config.yaml</code> or use the "Custom Stream URL" button above.</p>
       </div>
     `;
     return;

@@ -51,5 +51,5 @@ trap cleanup SIGINT SIGTERM
 sleep 1
 
 # 4. Start Go Dante Web Player
-echo "[Web Player] Starting Dante Web Player on port ${HTTP_PORT:-8080}..."
-exec dante-player -port "${HTTP_PORT:-8080}" -pipe-dir /tmp/dante_player -dante-name "${INFERNO_NAME:-Dante-Pi}"
+echo "[Web Player] Starting Dante Web Player on port ${HTTP_PORT:-8085}..."
+exec dante-player -port "${HTTP_PORT:-8085}" -pipe-dir /tmp/dante_player -dante-name "${INFERNO_NAME:-Dante-Pi}" -config "/opt/dante-player/config.yaml"

@@ -140,11 +140,13 @@ jobs:
 
       - name: Create and push multi-arch manifest
         working-directory: /tmp/digests
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           TAG_ARGS=()
-          for tag in ${{ steps.meta.outputs.tags }}; do
-            TAG_ARGS+=( "-t" "$tag" )
-          done
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && TAG_ARGS+=( "-t" "$tag" )
+          done <<< "$TAGS"
           
           DIGEST_ARGS=()
           for f in *; do

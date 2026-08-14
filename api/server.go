@@ -84,7 +84,7 @@ func (s *Server) handlePresets(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(s.cfg.Presets)
+		_ = json.NewEncoder(w).Encode(s.cfg.Stations)
 	case http.MethodPost:
 		var p config.StationPreset
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
