@@ -35,6 +35,10 @@ chmod 777 /tmp/dante_player /run
 export INFERNO_BIND_IP="$DANTE_IFACE"
 sed -i "s/interface = \".*\"/interface = \"$DANTE_IFACE\"/g" /etc/inferno/inferno-ptpv1.toml
 
+# Ensure kernel routes multicast (Dante PTP 224.0.1.129, mDNS 224.0.0.251, Audio 239.255.0.0/16) to Dante NIC
+ip link set "$DANTE_IFACE" multicast on 2>/dev/null || true
+ip route add 224.0.0.0/4 dev "$DANTE_IFACE" 2>/dev/null || true
+
 # 3. Start Statime PTP clock daemon in background on Dante interface
 echo "[PTP] Starting Statime clock daemon on interface $DANTE_IFACE..."
 statime -c /etc/inferno/inferno-ptpv1.toml &

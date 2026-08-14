@@ -1,4 +1,5 @@
 # Statime PTPv1 configuration for Dante synchronization
+loglevel = "info"
 domain = 0
 slave-only = true
 virtual-system-clock-base = "monotonic"

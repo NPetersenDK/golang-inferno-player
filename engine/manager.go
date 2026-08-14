@@ -154,8 +154,9 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 		_ = stdin.Close()
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(2 * time.Second)
 	}
 }
 
