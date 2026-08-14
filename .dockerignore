@@ -1,0 +1,12 @@
+# The Go builder does COPY . ./, so everything not needed to compile the player
+# or populate the runtime image is kept out of the build context.
+.git
+.github
+.gitignore
+.dockerignore
+*.exe
+*.md
+docker-compose.yml
+deploy/
+config.yaml
+config.example.yaml

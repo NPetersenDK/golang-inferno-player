@@ -1,7 +1,14 @@
 # syntax=docker/dockerfile:1
 # ==============================================================================
-# Ultra-Fast Multi-Arch Dockerfile for Dante Audio Hub (Inferno + Statime)
-# Uses shared base layer, BuildKit cache mounts, and fast parallel codegen
+# Self-contained multi-arch Dockerfile for Dante Audio Hub (Inferno + Statime).
+#
+# Everything is built here: no prebuilt base or dependency image to keep in
+# sync. The Go player and both Rust artifacts are cross-compiled on the build
+# platform, so the only emulated work is the Debian runtime stage.
+#
+# The Statime and Inferno stages both branch off rust-base, so BuildKit builds
+# them concurrently. They dominate a cold build - see docker-build.yml for how
+# the layer cache keeps them off the release path.
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -12,9 +19,10 @@ ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum* ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . ./
 RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/dante-player .
 
 # ------------------------------------------------------------------------------
@@ -47,9 +55,11 @@ ENV CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
 ENV CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
 ENV PKG_CONFIG_PATH_aarch64_unknown_linux_gnu=/usr/lib/aarch64-linux-gnu/pkgconfig
 ENV PKG_CONFIG_ALLOW_CROSS=1
-# Speed up Cargo builds: 16 parallel codegen units and disable heavy whole-program LTO
+# Speed up Cargo builds: 16 parallel codegen units and disable heavy whole-program LTO.
+# Stripping symbols cuts link time and image size; nothing here is debugged in place.
 ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
 ENV CARGO_PROFILE_RELEASE_LTO=off
+ENV CARGO_PROFILE_RELEASE_STRIP=symbols
 
 # ------------------------------------------------------------------------------
 # Stage 3A: Build Upstream Statime (PTPv1 Clock Daemon)
@@ -117,8 +127,8 @@ COPY --from=go-builder /out/dante-player /usr/local/bin/
 
 COPY docker/asound.conf /etc/asound.conf
 COPY docker/inferno-ptpv1.toml /etc/inferno/inferno-ptpv1.toml
-COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+# --chmod avoids a separate RUN layer, which on arm64 would run under emulation
+COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 ENV INFERNO_NAME="Dante-Pi"
 ENV INFERNO_TX_CHANNELS=8

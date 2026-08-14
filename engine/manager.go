@@ -19,6 +19,7 @@ type SystemStatus struct {
 	SampleRate    int         `json:"sample_rate"`
 	ClockStatus   string      `json:"clock_status"`
 	PTPStatus     string      `json:"ptp_status"`
+	PTP           PTPStats    `json:"ptp"`
 	ActiveStreams int         `json:"active_streams"`
 	Zones         []ZoneState `json:"zones"`
 }
@@ -31,6 +32,8 @@ type PlaybackManager struct {
 	listeners  map[chan SystemStatus]struct{}
 	listenerMu sync.Mutex
 	mu         sync.RWMutex
+	ptp        *PTPMonitor
+	discipline *ClockDiscipline
 }
 
 func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
@@ -49,9 +52,12 @@ func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
 	}
 	sort.Ints(mgr.zoneOrder)
 
-	// Start embedded userspace virtual clock servers for Inferno
-	_, _ = StartUsrvclockServer("/tmp/usrvclock")
-	_, _ = StartUsrvclockServer("/run/ptp-usrvclock")
+	// Measure the Dante grandmaster passively, then serve the resulting media
+	// clock to Inferno on both socket paths it may look for.
+	mgr.ptp = StartPTPMonitor()
+	mgr.discipline = StartClockDiscipline(mgr.ptp)
+	_, _ = StartUsrvclockServer("/tmp/usrvclock", mgr.discipline)
+	_, _ = StartUsrvclockServer("/run/ptp-usrvclock", mgr.discipline)
 
 	go mgr.eventBroadcaster()
 	go mgr.masterDanteAudioLoop()
@@ -260,15 +266,34 @@ func (m *PlaybackManager) GetStatus() SystemStatus {
 		}
 	}
 
+	stats, clockStatus, ptpStatus := m.clockStatus()
+
 	return SystemStatus{
 		DanteDevice:   m.cfg.DanteName,
 		DanteChannels: 8,
 		SampleRate:    m.cfg.SampleRate,
-		ClockStatus:   "PTP Locked (48kHz)",
-		PTPStatus:     "Slave to Dante Master",
+		ClockStatus:   clockStatus,
+		PTPStatus:     ptpStatus,
+		PTP:           stats,
 		ActiveStreams: active,
 		Zones:         zones,
 	}
+}
+
+func (m *PlaybackManager) clockStatus() (stats PTPStats, clock string, ptp string) {
+	if m.ptp == nil {
+		return PTPStats{LastSyncAgo: "never"}, "Media clock: static offset", "PTP monitor not started"
+	}
+	stats = m.ptp.Stats()
+	if !stats.Locked {
+		return stats,
+			fmt.Sprintf("Free-running on static offset (%d Sync packets seen)", stats.SyncPackets),
+			"No PTPv1 grandmaster locked"
+	}
+	clock = fmt.Sprintf("PTP Locked (%d Hz)", m.cfg.SampleRate)
+	ptp = fmt.Sprintf("Slave to %s: offset %.3f ms, drift %.2f ppm",
+		stats.MasterID, float64(stats.OffsetNs)/1e6, stats.DriftPPM)
+	return stats, clock, ptp
 }
 
 func (m *PlaybackManager) SubscribeState() chan SystemStatus {

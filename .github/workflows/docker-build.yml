@@ -17,6 +17,10 @@ env:
 jobs:
   # ----------------------------------------------------------------------------
   # Job 1: Test & Lint Go Stream Engine
+  #
+  # Runs alongside the image builds rather than gating them, so it costs no wall
+  # clock. Publishing the multi-arch manifest still waits for it, so a failing
+  # test never becomes a tagged release.
   # ----------------------------------------------------------------------------
   test-go:
     name: Test Go Web Player
@@ -35,12 +39,14 @@ jobs:
           go vet ./...
           go build -v ./...
 
+      - name: Run unit tests
+        run: go test ./...
+
   # ----------------------------------------------------------------------------
   # Job 2: Build Architectures in Parallel on Separate Runners
   # ----------------------------------------------------------------------------
   build-arch:
     name: Build (${{ matrix.platform }})
-    needs: test-go
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -55,6 +61,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # Only the Debian runtime stage executes target-architecture commands;
+      # the Go and Rust builds are cross-compiled on the build platform.
+      - name: Set up QEMU
+        if: matrix.platform == 'linux/arm64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -80,9 +94,16 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: ${{ matrix.platform }}
+          provenance: false
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          # Registry cache rather than type=gha. GitHub's Actions cache is scoped
+          # per ref, and this workflow only runs on tags, so a cache written
+          # while building v1.0.0 is invisible when building v1.0.1 - every
+          # release recompiled Statime and Inferno from scratch. A registry
+          # cache is shared by all runs. It is only an optimisation: if the
+          # cache tag is missing or stale the build still succeeds, just slower.
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ steps.platform-tag.outputs.arch }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ steps.platform-tag.outputs.arch }},mode=max
 
       - name: Export digest
         run: |
@@ -103,7 +124,7 @@ jobs:
   # ----------------------------------------------------------------------------
   merge-manifests:
     name: Merge & Publish Multi-Arch Manifest
-    needs: build-arch
+    needs: [build-arch, test-go]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -147,12 +168,12 @@ jobs:
           while IFS= read -r tag; do
             [ -n "$tag" ] && TAG_ARGS+=( "-t" "$tag" )
           done <<< "$TAGS"
-          
+
           DIGEST_ARGS=()
           for f in *; do
             DIGEST_ARGS+=( "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:$f" )
           done
-          
+
           echo "Creating manifest for tags: ${TAG_ARGS[*]}"
           echo "Using digests: ${DIGEST_ARGS[*]}"
           docker buildx imagetools create "${TAG_ARGS[@]}" "${DIGEST_ARGS[@]}"

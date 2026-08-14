@@ -6,7 +6,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -26,16 +25,18 @@ type UsrvclockFrame struct {
 
 // UsrvclockServer implements the userspace virtual clock Unix datagram server.
 type UsrvclockServer struct {
-	socketPath  string
-	conn        *net.UnixConn
-	clients     map[string]*net.UnixAddr
-	ptpOffsetNs int64
-	mu          sync.Mutex
-	stopChan    chan struct{}
+	socketPath string
+	conn       *net.UnixConn
+	clients    map[string]*net.UnixAddr
+	discipline *ClockDiscipline
+	mu         sync.Mutex
+	stopChan   chan struct{}
 }
 
-// StartUsrvclockServer binds a Unix datagram socket and continuously serves ClockOverlays to Inferno.
-func StartUsrvclockServer(socketPath string) (*UsrvclockServer, error) {
+// StartUsrvclockServer binds a Unix datagram socket and continuously serves
+// ClockOverlays to Inferno. The Shift and FreqScale come from the shared
+// ClockDiscipline, so every socket hands out the same media clock.
+func StartUsrvclockServer(socketPath string, discipline *ClockDiscipline) (*UsrvclockServer, error) {
 	_ = os.Remove(socketPath)
 
 	addr := &net.UnixAddr{Name: socketPath, Net: "unixgram"}
@@ -45,41 +46,41 @@ func StartUsrvclockServer(socketPath string) (*UsrvclockServer, error) {
 	}
 	_ = os.Chmod(socketPath, 0777)
 
-	// Default PTP offset between local time and Dante Grandmaster (665ms observed on Dante network)
-	offsetMs := int64(665)
-	if env := os.Getenv("DANTE_PTP_OFFSET_MS"); env != "" {
-		if val, err := strconv.ParseInt(env, 10, 64); err == nil {
-			offsetMs = val
-		}
-	}
-	offsetNs := offsetMs * 1_000_000
-
 	srv := &UsrvclockServer{
-		socketPath:  socketPath,
-		conn:        conn,
-		clients:     make(map[string]*net.UnixAddr),
-		ptpOffsetNs: offsetNs,
-		stopChan:    make(chan struct{}),
+		socketPath: socketPath,
+		conn:       conn,
+		clients:    make(map[string]*net.UnixAddr),
+		discipline: discipline,
+		stopChan:   make(chan struct{}),
 	}
 
 	go srv.readLoop()
 	go srv.broadcastLoop()
 
-	log.Printf("[Clock Server] usrvclock media clock server active on %s (PTP Offset: %d ms)", socketPath, offsetMs)
+	log.Printf("[Clock Server] usrvclock media clock server active on %s", socketPath)
 	return srv, nil
 }
 
 func (s *UsrvclockServer) makeFrame() []byte {
 	now := time.Now().UnixNano()
+
+	var shiftNs int64
+	var freqScale float64
+	if s.discipline != nil {
+		shiftNs, freqScale = s.discipline.Overlay()
+	}
+
 	frame := UsrvclockFrame{
-		Magic:     [2]byte{'V', 'C'},
-		Major:     1,
-		Minor:     0,
-		Flags:     1, // 0x0001 (Valid clock overlay)
-		ClockID:   0, // 0 = CLOCK_REALTIME (smoothly follows system/PTP clock)
-		LastSync:  now,
-		Shift:     s.ptpOffsetNs, // Exact PTP phase compensation for Dante receivers
-		FreqScale: 0.0,
+		Magic:    [2]byte{'V', 'C'},
+		Major:    1,
+		Minor:    0,
+		Flags:    1, // 0x0001 (Valid clock overlay)
+		ClockID:  0, // 0 = CLOCK_REALTIME (smoothly follows system/PTP clock)
+		LastSync: now,
+		// Inferno computes now_ns = CLOCK_REALTIME + Shift + elapsed*FreqScale,
+		// so Shift carries the grandmaster phase and FreqScale its rate.
+		Shift:     shiftNs,
+		FreqScale: freqScale,
 	}
 
 	buf := new(bytes.Buffer)
