@@ -12,34 +12,46 @@
 # and does not run the player. So this takes the finished package from
 # raspotify's apt repository and runs the binary directly. No Rust build.
 #
-# The package is prebuilt for amd64, arm64, armhf and riscv64. ARMv6 (Pi 1,
-# Pi Zero v1) is not supported upstream.
+# Built for amd64 and arm64 only.
 # ==============================================================================
 
 FROM debian:bookworm-slim
 
-# libasound2 and libpulse0 are needed even though we only use the pipe backend:
+# -x echoes each command, so a failure in the build log names the command that
+# caused it rather than leaving a collapsed && chain to guess at.
+SHELL ["/bin/sh", "-eux", "-c"]
+
+# apt-get download drops privileges to _apt, which cannot write to /.
+WORKDIR /tmp
+
 # raspotify builds librespot with the ALSA and PulseAudio backends compiled in,
-# so the dynamic linker wants both shared objects present.
-#
-# The package is extracted rather than installed, because it ships a systemd
-# unit whose maintainer scripts have nothing to talk to inside a container. All
-# we want is /usr/bin/librespot.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# so both shared objects must be present even though we only use the pipe one.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
       libasound2 \
-      libpulse0 \
-    && curl -fsSL https://dtcooper.github.io/raspotify/key.asc \
-         -o /usr/share/keyrings/raspotify_key.asc \
-    && chmod 0644 /usr/share/keyrings/raspotify_key.asc \
-    && echo 'deb [signed-by=/usr/share/keyrings/raspotify_key.asc] https://dtcooper.github.io/raspotify raspotify main' \
-         > /etc/apt/sources.list.d/raspotify.list \
-    && apt-get update \
-    && apt-get download raspotify \
-    && dpkg-deb -x raspotify_*.deb / \
-    && rm -f raspotify_*.deb \
-    && apt-get purge -y curl \
-    && rm -rf /var/lib/apt/lists/*
+      libpulse0
+
+# raspotify's apt repository, set up exactly as their install.sh does.
+RUN curl -fsSL https://dtcooper.github.io/raspotify/key.asc \
+      -o /usr/share/keyrings/raspotify_key.asc && \
+    chmod 0644 /usr/share/keyrings/raspotify_key.asc && \
+    echo 'deb [signed-by=/usr/share/keyrings/raspotify_key.asc] https://dtcooper.github.io/raspotify raspotify main' \
+      > /etc/apt/sources.list.d/raspotify.list
+
+# Extract rather than install: the package ships a systemd unit whose maintainer
+# scripts have nothing to talk to inside a container, and all we want is
+# /usr/bin/librespot.
+RUN apt-get update && \
+    apt-get download raspotify && \
+    ls -l raspotify_*.deb && \
+    dpkg-deb -x raspotify_*.deb / && \
+    rm -f raspotify_*.deb && \
+    rm -rf /var/lib/apt/lists/*
+
+# Fail the build here rather than at runtime if the binary cannot start - a
+# missing shared library or a bad architecture shows up immediately.
+RUN /usr/bin/librespot --version
 
 ENTRYPOINT ["/usr/bin/librespot"]

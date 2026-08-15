@@ -170,7 +170,7 @@ docker compose -f docker/compose.spotify.yml up -d
 
 Nothing is built locally and nothing is installed on the host. The two compose files duplicate the `dante-streamer` service, so mirror any change you make to the base one.
 
-librespot publishes no official image, so this project publishes one at `ghcr.io/npetersendk/dante-librespot`, built for amd64, arm64 and armhf by the `build-librespot` workflow. It takes the finished `.deb` from **raspotify**'s apt repository and runs `/usr/bin/librespot` directly, bypassing the systemd unit the package ships — a package download rather than a Rust build. ARMv6 (Pi 1, Pi Zero v1) is not supported upstream.
+librespot publishes no official image, so this project publishes one at `ghcr.io/npetersendk/dante-librespot`, built for amd64 and arm64 by the `build-librespot` workflow. It takes the finished `.deb` from **raspotify**'s apt repository and runs `/usr/bin/librespot` directly, bypassing the systemd unit the package ships — a package download rather than a Rust build.
 
 That image has its own lifecycle and is rebuilt monthly to track raspotify releases and Debian updates. The streamer image does not depend on it; if you never enable a Spotify source you never pull it.
 
