@@ -54,6 +54,23 @@ if [ -z "$INFERNO_DEVICE_ID" ]; then
     fi
 fi
 
+# Channel count has to agree between the ALSA plugin and the mixer, so one
+# variable drives both. Each channel costs a set of mDNS records every device on
+# the segment has to cache, so fewer channels means a smaller footprint.
+DANTE_TX_CHANNELS="${DANTE_TX_CHANNELS:-8}"
+case "$DANTE_TX_CHANNELS" in
+    2|4|6|8)
+        sed -i "s/^\( *TX_CHANNELS \).*/\1$DANTE_TX_CHANNELS/" /etc/asound.conf
+        export INFERNO_TX_CHANNELS="$DANTE_TX_CHANNELS"
+        export DANTE_TX_CHANNELS
+        echo "[Dante] Advertising $DANTE_TX_CHANNELS TX channels"
+        ;;
+    *)
+        echo "[Dante] WARNING: DANTE_TX_CHANNELS=$DANTE_TX_CHANNELS is not one of 2/4/6/8, keeping 8"
+        unset DANTE_TX_CHANNELS
+        ;;
+esac
+
 # Ensure kernel routes multicast (Dante PTP 224.0.1.129, mDNS 224.0.0.251, Audio 239.255.0.0/16) to Dante NIC
 ip link set "$DANTE_IFACE" multicast on 2>/dev/null || true
 ip link set "$DANTE_IFACE" allmulticast on 2>/dev/null || true

@@ -115,14 +115,30 @@ func ptpStartupTimeout() time.Duration {
 	return 15 * time.Second
 }
 
-// masterDanteAudioLoop keeps a single continuous 8-channel 48kHz audio stream running into pcm.inferno.
+// danteTXChannels is how many channels we advertise and transmit. Every channel
+// costs a set of mDNS records that the whole segment has to cache, so lowering
+// it shrinks our footprint on smaller devices. Must match TX_CHANNELS in the
+// generated asound.conf; the entrypoint reads the same variable.
+func danteTXChannels() int {
+	n := 8
+	if v := os.Getenv("DANTE_TX_CHANNELS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed >= 2 && parsed <= 8 {
+			n = parsed - parsed%2 // zones occupy stereo pairs
+		} else {
+			log.Printf("[Dante Master] Ignoring DANTE_TX_CHANNELS=%q, must be an even number between 2 and 8", v)
+		}
+	}
+	return n
+}
+
+// masterDanteAudioLoop keeps a single continuous 48kHz audio stream running into pcm.inferno.
 func (m *PlaybackManager) masterDanteAudioLoop() {
 	const (
 		sampleRate    = 48000
-		numChannels   = 8
 		framesPerTick = 960 // 20ms block
-		bytesPerTick  = framesPerTick * numChannels * 4
 	)
+	numChannels := danteTXChannels()
+	bytesPerTick := framesPerTick * numChannels * 4
 
 	masterBuf := make([]byte, bytesPerTick)
 
@@ -140,10 +156,10 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 	}
 
 	for {
-		log.Printf("[Dante Master] Starting continuous 8-channel Dante ALSA transmitter (pcm.inferno)...")
+		log.Printf("[Dante Master] Starting continuous %d-channel Dante ALSA transmitter (pcm.inferno)...", numChannels)
 
 		// Launch aplay with 250ms buffer to prevent underruns
-		cmd := exec.Command("aplay", "-D", "inferno", "-t", "raw", "-f", "S32_LE", "-r", "48000", "-c", "8",
+		cmd := exec.Command("aplay", "-D", "inferno", "-t", "raw", "-f", "S32_LE", "-r", "48000", "-c", strconv.Itoa(numChannels),
 			fmt.Sprintf("--buffer-time=%d", alsaBufferMicros()), "-")
 		
 		stdin, err := cmd.StdinPipe()
@@ -170,7 +186,7 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 			continue
 		}
 
-		log.Printf("[Dante Master] Dante ALSA audio transmitter active (8 TX channels). Dante-Pi is now broadcasting.")
+		log.Printf("[Dante Master] Dante ALSA audio transmitter active (%d TX channels). Dante-Pi is now broadcasting.", numChannels)
 
 		// Pre-fill ALSA buffer with 100ms of silence to ensure no initial underruns
 		for i := 0; i < 5; i++ {
@@ -219,7 +235,7 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 			}
 			m.mu.RUnlock()
 
-			// 3. Send 8-channel frame to Inferno ALSA soundcard
+			// 3. Send the frame to Inferno ALSA soundcard
 			if _, err := stdin.Write(masterBuf); err != nil {
 				log.Printf("[Dante Master] ALSA write error (%v). Restarting transmitter...", err)
 				aplayAlive = false
