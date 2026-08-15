@@ -78,8 +78,12 @@ zones:
       # so it keeps the queue full - the cap is the steady state, not the
       # prebuffer. It also decides how much already-queued audio must drain
       # before a track change in the app reaches the speakers. Defaults to
-      # twice prebuffer_ms. Lower it if Spotify Connect feels laggy, raise it
-      # if you hear dropouts.
+      # twice prebuffer_ms. Lower it if the producer feels laggy, raise it if
+      # you hear dropouts.
+      #
+      # DANTE_SOURCE_PREBUFFER_MS and DANTE_SOURCE_BUFFER_MS override both for
+      # every source zone, so they can be tuned from the compose file without
+      # editing a mounted config.
       buffer_ms: 600
   # ----------------------------------------------------------------------------
 

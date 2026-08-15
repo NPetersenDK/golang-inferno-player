@@ -77,6 +77,23 @@ func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
 	return mgr
 }
 
+// alsaBufferMicros sizes the ALSA playback buffer. Lowering it cuts latency but
+// leaves less margin when the Pi is busy, which shows up as [Audio Health]
+// counting holes.
+func alsaBufferMicros() int {
+	return envInt("DANTE_ALSA_BUFFER_US", 250_000)
+}
+
+// envInt reads a positive integer from the environment, or returns def.
+func envInt(name string, def int) int {
+	if v := os.Getenv(name); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return def
+}
+
 // ptpStartupTimeout caps the wait for a grandmaster, so a network without PTP
 // still produces a Dante device instead of hanging.
 func ptpStartupTimeout() time.Duration {
@@ -116,7 +133,8 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 		log.Printf("[Dante Master] Starting continuous 8-channel Dante ALSA transmitter (pcm.inferno)...")
 
 		// Launch aplay with 250ms buffer to prevent underruns
-		cmd := exec.Command("aplay", "-D", "inferno", "-t", "raw", "-f", "S32_LE", "-r", "48000", "-c", "8", "--buffer-time=250000", "-")
+		cmd := exec.Command("aplay", "-D", "inferno", "-t", "raw", "-f", "S32_LE", "-r", "48000", "-c", "8",
+			fmt.Sprintf("--buffer-time=%d", alsaBufferMicros()), "-")
 		
 		stdin, err := cmd.StdinPipe()
 		if err != nil {

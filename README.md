@@ -182,6 +182,19 @@ That image has its own lifecycle and is rebuilt monthly to track raspotify relea
 
 Raspberry Pi OS already runs `avahi-daemon` — it is what serves your `.local` hostname — so this costs no installation, and it avoids two daemons competing for UDP 5353 on the host network. Confirm with `systemctl status avahi-daemon`, and `sudo apt install avahi-daemon` if it is genuinely absent.
 
+### Tuning latency
+
+A pipe producer is held back by backpressure rather than paced by a network, so it keeps its queue full — the queue cap, not the prebuffer, is what you hear. These override the config for every source zone, so they can be tuned from the compose file without editing a mounted `config.yaml`:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `DANTE_SOURCE_BUFFER_MS` | 2× prebuffer | Queue cap. The largest single contributor |
+| `DANTE_SOURCE_PREBUFFER_MS` | 1000 | Fill level before a zone starts delivering |
+| `DANTE_ALSA_BUFFER_US` | 250000 | ALSA playback buffer, all zones |
+| `DANTE_FIFO_BYTES` | 16384 | Kernel buffer behind a source FIFO |
+
+Start with `DANTE_SOURCE_BUFFER_MS`. Lowering the others trades margin for responsiveness, and `[Audio Health]` in the log counts the resulting holes once a minute — no output means none. Spotify Connect will not go below a few hundred milliseconds regardless, since librespot decodes ahead and exposes no control over it.
+
 ### Pointing at your config
 
 The compose files default to `../config.yaml`, which is relative to **the compose file**, so it resolves to the repository root. If you copy a compose file somewhere else, set `DANTE_CONFIG` to match:

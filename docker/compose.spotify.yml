@@ -16,6 +16,12 @@ services:
       - INFERNO_TX_CHANNELS=8
       - INFERNO_SAMPLE_RATE=48000
       - HTTP_PORT=8085
+      # Latency knobs, smallest risk first. Lower means snappier; too low shows
+      # up as [Audio Health] counting holes in the log.
+      - DANTE_SOURCE_PREBUFFER_MS=150
+      - DANTE_SOURCE_BUFFER_MS=300
+      # - DANTE_ALSA_BUFFER_US=250000   # ALSA playback buffer, all zones
+      # - DANTE_FIFO_BYTES=16384        # kernel buffer behind a source FIFO
     cap_add:
       # SYS_TIME is deliberately absent: the PTP listener serves a clock overlay
       # rather than touching the system clock.

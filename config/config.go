@@ -210,6 +210,34 @@ func (c *AppConfig) applyEnvOverrides() {
 	if pipe := os.Getenv("PIPE_DIR"); pipe != "" {
 		c.PipeDir = pipe
 	}
+
+	// Latency knobs for source zones, so they can be tuned from the compose
+	// file without editing a mounted config.
+	prebuffer := envInt("DANTE_SOURCE_PREBUFFER_MS")
+	buffer := envInt("DANTE_SOURCE_BUFFER_MS")
+	for i := range c.Zones {
+		src := c.Zones[i].Source
+		if src == nil {
+			continue
+		}
+		if prebuffer > 0 {
+			src.PrebufferMs = prebuffer
+			src.BufferMs = 0 // recompute the default from the new prebuffer
+		}
+		if buffer > 0 {
+			src.BufferMs = buffer
+		}
+		src.applyDefaults(&c.Zones[i], c.PipeDir)
+	}
+}
+
+func envInt(name string) int {
+	if v := os.Getenv(name); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func (c *AppConfig) Save(path string) error {

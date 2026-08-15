@@ -41,8 +41,9 @@ const (
 	// momentarily short. Re-priming costs a whole prebuffer of silence.
 	zoneStallChunks = 50 // 1 s
 
-	// Kernel buffer behind a source FIFO, down from the 64 KiB default.
-	fifoBytes = 16 << 10 // ~90 ms
+	// Default kernel buffer behind a source FIFO, down from the 64 KiB the
+	// kernel would otherwise use. Override with DANTE_FIFO_BYTES.
+	defaultFIFOBytes = 16 << 10 // ~90 ms at CD rate stereo
 )
 
 type ZoneState struct {
@@ -239,7 +240,7 @@ func (z *ZonePlayer) StartSource() error {
 		return err
 	}
 	z.fifoKeep = keep
-	shrinkPipe(keep, fifoBytes)
+	shrinkPipe(keep, envInt("DANTE_FIFO_BYTES", defaultFIFOBytes))
 
 	z.mu.Lock()
 	ctx, cancel := context.WithCancel(context.Background())
