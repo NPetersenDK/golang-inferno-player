@@ -29,31 +29,20 @@ const (
 
 // Buffering geometry, in 20 ms chunks.
 //
-// FFmpeg produces at whatever rate the source server hands the stream over,
-// while the mixer consumes at the Dante media clock rate. Those are two
-// unrelated oscillators, so the queue level is a random walk with no restoring
-// force: whatever it is primed to, it drifts from there. The only defence is to
-// make the walk's headroom much larger than the jitter of an internet stream,
-// which is why web radio players buffer seconds rather than milliseconds.
+// A source and the mixer run on unrelated oscillators, so the queue level is a
+// random walk with no restoring force. Headroom has to exceed the jitter of the
+// source, which for an internet stream means seconds, not milliseconds.
 const (
-	// zoneQueueChunks caps the queue, and so caps added latency. The producer
-	// drops the oldest chunk once it is reached, which is what handles a source
-	// that runs faster than the Dante clock.
-	zoneQueueChunks = 150 // 3 s
+	zoneQueueChunks     = 150 // 3 s, caps latency and drops the oldest when full
+	zonePrebufferChunks = 50  // 1 s of slack in either direction
+	zoneChunkMillis     = 20
 
-	// zonePrebufferChunks is the level a zone fills to before it starts
-	// delivering, leaving roughly a second of slack in both directions.
-	zonePrebufferChunks = 50 // 1 s
-
-	// zoneChunkMillis is the wall time one chunk represents, used to convert a
-	// configured prebuffer in milliseconds into chunks.
-	zoneChunkMillis = 20
-
-	// zoneStallChunks is how long the queue must stay empty before the zone is
-	// treated as stalled rather than momentarily short. Rebuilding the whole
-	// prebuffer costs a second of silence, so it must not be triggered by the
-	// odd missing chunk.
+	// How long the queue must stay empty to count as stalled rather than
+	// momentarily short. Re-priming costs a whole prebuffer of silence.
 	zoneStallChunks = 50 // 1 s
+
+	// Kernel buffer behind a source FIFO, down from the 64 KiB default.
+	fifoBytes = 16 << 10 // ~90 ms
 )
 
 type ZoneState struct {
@@ -96,9 +85,10 @@ type ZonePlayer struct {
 	emptyPulls  atomic.Int64
 	starvations atomic.Uint64
 
-	// prebufferChunks is per zone: a local producer feeding a FIFO is far
-	// steadier than an internet stream and can run much shorter.
+	// Both are per zone: a local producer feeding a FIFO is far steadier than an
+	// internet stream and can run much shorter.
 	prebufferChunks int
+	queueChunks     int
 
 	cancelFunc context.CancelFunc
 	stateChan  chan struct{}
@@ -107,27 +97,40 @@ type ZonePlayer struct {
 }
 
 func NewZonePlayer(cfg config.ZoneConfig, stateChan chan struct{}) *ZonePlayer {
+	prebuffer, queue := zonePrebufferChunks, zoneQueueChunks
+	if src := cfg.Source; src != nil {
+		if src.PrebufferMs > 0 {
+			prebuffer = clampChunks(src.PrebufferMs, 1, zoneQueueChunks/2)
+		}
+		if src.BufferMs > 0 {
+			queue = clampChunks(src.BufferMs, prebuffer+1, zoneQueueChunks)
+		}
+	}
+
 	z := &ZonePlayer{
 		cfg:             cfg,
 		status:          StatusIdle,
 		volume:          85,
 		muted:           false,
 		stateChan:       stateChan,
-		audioChan:       make(chan []int32, zoneQueueChunks),
-		prebufferChunks: zonePrebufferChunks,
-	}
-	if cfg.Source != nil && cfg.Source.PrebufferMs > 0 {
-		chunks := cfg.Source.PrebufferMs / zoneChunkMillis
-		if chunks < 1 {
-			chunks = 1
-		} else if chunks > zoneQueueChunks/2 {
-			chunks = zoneQueueChunks / 2
-		}
-		z.prebufferChunks = chunks
+		audioChan:       make(chan []int32, queue),
+		prebufferChunks: prebuffer,
+		queueChunks:     queue,
 	}
 	z.setPeakL(0)
 	z.setPeakR(0)
 	return z
+}
+
+func clampChunks(millis, min, max int) int {
+	chunks := millis / zoneChunkMillis
+	if chunks < min {
+		return min
+	}
+	if chunks > max {
+		return max
+	}
+	return chunks
 }
 
 // IsSource reports whether this zone is permanently fed by an external
@@ -236,6 +239,7 @@ func (z *ZonePlayer) StartSource() error {
 		return err
 	}
 	z.fifoKeep = keep
+	shrinkPipe(keep, fifoBytes)
 
 	z.mu.Lock()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -251,24 +255,27 @@ func (z *ZonePlayer) StartSource() error {
 	z.mu.Unlock()
 	z.notifyState()
 
-	log.Printf("[Zone %d] Source %q reading %s PCM %d Hz from %s (prebuffer %d ms)",
-		z.cfg.ID, src.Label, src.Format, src.SampleRate, src.Path, z.prebufferChunks*zoneChunkMillis)
+	log.Printf("[Zone %d] Source %q reading %s PCM %d Hz from %s (prebuffer %d ms, buffer %d ms)",
+		z.cfg.ID, src.Label, src.Format, src.SampleRate, src.Path,
+		z.prebufferChunks*zoneChunkMillis, z.queueChunks*zoneChunkMillis)
 
 	go z.sourceLoop(ctx, *src)
 	return nil
 }
 
-// sourceLoop keeps a decoder attached to the FIFO. FFmpeg does the resampling,
-// so a 44.1 kHz producer such as librespot lands on the 48 kHz Dante clock
-// without the producer having to know anything about it.
+// sourceLoop keeps a decoder attached to the FIFO, with FFmpeg resampling the
+// producer's rate onto the Dante clock.
 //
 // It reads with backpressure, which is what paces the producer: a full queue
-// blocks the reader, FFmpeg's pipe fills, and the producer's own write blocks.
+// blocks the reader, FFmpeg's pipe fills, and the producer's write blocks.
 // Drain the FIFO as fast as it is written and the producer has no clock at all.
 func (z *ZonePlayer) sourceLoop(ctx context.Context, src config.ZoneSource) {
 	args := []string{
 		"-hide_banner",
 		"-loglevel", "error",
+		// FFmpeg otherwise holds a few hundred ms on each side of the resampler.
+		"-fflags", "nobuffer",
+		"-flags", "low_delay",
 		"-f", src.Format,
 		"-ar", strconv.Itoa(src.SampleRate),
 		"-ac", strconv.Itoa(src.Channels),
@@ -277,6 +284,7 @@ func (z *ZonePlayer) sourceLoop(ctx context.Context, src config.ZoneSource) {
 		"-f", "s32le",
 		"-ar", "48000",
 		"-ac", "2",
+		"-flush_packets", "1",
 		"-",
 	}
 
@@ -431,10 +439,8 @@ func (z *ZonePlayer) decodeInto(ctx context.Context, args []string, backpressure
 // enqueue hands one chunk to the mixer.
 //
 // A station stream is paced by the network and cannot be told to wait, so a
-// full queue drops the oldest chunk rather than stalling the reader. A pipe
-// producer is the exact opposite: it writes as fast as we drain, so it has to
-// be blocked. Without that backpressure librespot races through a whole track
-// in milliseconds and Spotify appears to skip.
+// full queue drops the oldest chunk. A pipe producer is the opposite: it writes
+// as fast as we drain, so it has to be blocked or it has no clock at all.
 func (z *ZonePlayer) enqueue(ctx context.Context, samples []int32, backpressure bool) error {
 	if backpressure {
 		select {
@@ -461,12 +467,9 @@ func (z *ZonePlayer) enqueue(ctx context.Context, samples []int32, backpressure 
 	return nil
 }
 
-// PullSamples pulls up to numFrames stereo samples (numFrames * 2 int32s), applies volume and updates peaks.
-//
-// A zone delivers nothing until its queue holds zonePrebufferChunks, and it
-// goes back to rebuilding that prebuffer the moment the queue runs dry. Handing
-// out the single chunk that happens to be available would just glitch again on
-// the next tick.
+// PullSamples pulls up to numFrames stereo samples (numFrames * 2 int32s),
+// applies volume and updates peaks. Delivers nothing until the queue holds
+// prebufferChunks.
 func (z *ZonePlayer) PullSamples(numFrames int) ([]int32, bool) {
 	z.mu.RLock()
 	vol := z.volume
@@ -502,11 +505,9 @@ func (z *ZonePlayer) PullSamples(numFrames int) ([]int32, bool) {
 	case samples = <-z.audioChan:
 		z.emptyPulls.Store(0)
 	default:
-		// A momentary shortfall costs one 20 ms hole. Dropping back to
-		// buffering here would instead cost a full prebuffer of silence, and
-		// since the queue level drifts freely it would happen over and over -
-		// that is what made the zone flap between playing and buffering. Only a
-		// sustained gap means the source has actually stalled.
+		// A momentary shortfall costs one 20 ms hole. Re-priming here would
+		// cost a whole prebuffer of silence, repeatedly, since the queue level
+		// drifts freely. Only a sustained gap means the source stalled.
 		z.starvations.Add(1)
 		if z.emptyPulls.Add(1) >= zoneStallChunks {
 			z.setPrimed(false)

@@ -14,28 +14,29 @@ import (
 )
 
 // ZoneSource turns a zone into a permanent feed from an external producer
-// instead of a station browser slot. The engine only knows how to read raw PCM
-// from a FIFO; what writes to that FIFO - librespot, shairport-sync, anything
-// else - is entirely outside this project. Leave it unset and the zone behaves
-// exactly as before.
+// instead of a station browser slot. What writes to the FIFO is outside this
+// project. Leave it unset and the zone behaves exactly as before.
 type ZoneSource struct {
 	// Type selects the mechanism. Only "pipe" exists today.
 	Type string `json:"type" yaml:"type"`
 	// Path is the FIFO to read. Created at startup if missing.
 	Path string `json:"path" yaml:"path"`
-	// Label is what the UI shows for this zone, e.g. "Spotify".
+	// Label is what the UI shows for this zone.
 	Label string `json:"label,omitempty" yaml:"label,omitempty"`
 
-	// Raw PCM layout the producer writes. Defaults suit librespot's pipe
-	// backend, which emits S16LE stereo at 44.1 kHz.
+	// Raw PCM layout the producer writes. Defaults are CD rate stereo.
 	Format     string `json:"format,omitempty" yaml:"format,omitempty"`
 	SampleRate int    `json:"sample_rate,omitempty" yaml:"sample_rate,omitempty"`
 	Channels   int    `json:"channels,omitempty" yaml:"channels,omitempty"`
 
-	// PrebufferMs overrides the zone queue depth. A local producer is far
-	// steadier than an internet stream, so a source zone can run much shorter
-	// than the default and stay responsive.
+	// PrebufferMs is how much audio must be queued before the zone starts
+	// delivering.
 	PrebufferMs int `json:"prebuffer_ms,omitempty" yaml:"prebuffer_ms,omitempty"`
+
+	// BufferMs caps the queue and sets the latency. Backpressure keeps a pipe
+	// producer's queue full, so the cap is the steady state, not the prebuffer.
+	// Defaults to twice PrebufferMs.
+	BufferMs int `json:"buffer_ms,omitempty" yaml:"buffer_ms,omitempty"`
 }
 
 type ZoneConfig struct {
@@ -95,6 +96,9 @@ func (s *ZoneSource) applyDefaults(zone *ZoneConfig, pipeDir string) {
 	}
 	if s.Channels <= 0 {
 		s.Channels = 2
+	}
+	if s.BufferMs <= 0 && s.PrebufferMs > 0 {
+		s.BufferMs = s.PrebufferMs * 2
 	}
 }
 

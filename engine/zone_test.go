@@ -17,9 +17,9 @@ func newTestZone() *ZonePlayer {
 func newTestSourceZone(prebufferMs int) *ZonePlayer {
 	return NewZonePlayer(config.ZoneConfig{
 		ID:   4,
-		Name: "Spotify",
+		Name: "Line In",
 		Source: &config.ZoneSource{
-			Type: "pipe", Path: "/tmp/spotify.pcm", Label: "Spotify",
+			Type: "pipe", Path: "/tmp/linein.pcm", Label: "Line In",
 			PrebufferMs: prebufferMs,
 		},
 	}, make(chan struct{}, 100))
@@ -112,8 +112,8 @@ func drainZone(t *testing.T, z *ZonePlayer, chunks int) {
 func TestSourceZoneRejectsStationControl(t *testing.T) {
 	z := NewZonePlayer(config.ZoneConfig{
 		ID:     4,
-		Name:   "Spotify",
-		Source: &config.ZoneSource{Type: "pipe", Path: "/tmp/spotify.pcm", Label: "Spotify"},
+		Name:   "Line In",
+		Source: &config.ZoneSource{Type: "pipe", Path: "/tmp/linein.pcm", Label: "Line In"},
 	}, make(chan struct{}, 100))
 
 	if !z.IsSource() {
@@ -129,8 +129,8 @@ func TestSourceZoneRejectsStationControl(t *testing.T) {
 		t.Errorf("status %q after Stop on a source zone, want it untouched (%q)", got, StatusPlaying)
 	}
 
-	if got := z.GetState().SourceLabel; got != "Spotify" {
-		t.Errorf("source label %q, want Spotify", got)
+	if got := z.GetState().SourceLabel; got != "Line In" {
+		t.Errorf("source label %q, want Line In", got)
 	}
 }
 
@@ -139,7 +139,7 @@ func TestSourceZoneRejectsStationControl(t *testing.T) {
 func TestSourcePrebufferOverride(t *testing.T) {
 	z := NewZonePlayer(config.ZoneConfig{
 		ID:     4,
-		Source: &config.ZoneSource{Type: "pipe", Path: "/tmp/spotify.pcm", PrebufferMs: 300},
+		Source: &config.ZoneSource{Type: "pipe", Path: "/tmp/linein.pcm", PrebufferMs: 300},
 	}, make(chan struct{}, 100))
 
 	if want := 300 / zoneChunkMillis; z.prebufferChunks != want {
@@ -154,6 +154,28 @@ func TestSourcePrebufferOverride(t *testing.T) {
 	pushChunks(z, 1)
 	if _, ok := z.PullSamples(960); !ok {
 		t.Error("did not deliver once the configured prebuffer was reached")
+	}
+}
+
+// buffer_ms is what sets the latency you hear: a blocked producer keeps the
+// queue full, so the cap is the steady state, not the prebuffer.
+func TestSourceBufferCapsTheQueue(t *testing.T) {
+	z := NewZonePlayer(config.ZoneConfig{
+		ID: 4,
+		Source: &config.ZoneSource{
+			Type: "pipe", Path: "/tmp/linein.pcm",
+			PrebufferMs: 300, BufferMs: 600,
+		},
+	}, make(chan struct{}, 100))
+
+	if want := 600 / zoneChunkMillis; z.queueChunks != want {
+		t.Errorf("queue %d chunks, want %d", z.queueChunks, want)
+	}
+	if got := cap(z.audioChan); got != z.queueChunks {
+		t.Errorf("channel capacity %d, want %d", got, z.queueChunks)
+	}
+	if z.prebufferChunks >= z.queueChunks {
+		t.Errorf("prebuffer %d must stay below the queue cap %d", z.prebufferChunks, z.queueChunks)
 	}
 }
 
@@ -210,8 +232,8 @@ func TestSourceZoneBuffersWhileFilling(t *testing.T) {
 	}
 }
 
-// Backpressure is the only thing pacing a pipe producer. Without it librespot
-// writes a whole track in milliseconds and Spotify appears to skip.
+// Backpressure is the only thing pacing a pipe producer. Without it the
+// producer runs at whatever speed we can drain, which is not realtime.
 func TestEnqueueBlocksWhenBackpressureRequested(t *testing.T) {
 	z := newTestZone()
 	pushChunks(z, zoneQueueChunks) // queue full

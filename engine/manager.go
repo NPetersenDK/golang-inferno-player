@@ -77,9 +77,8 @@ func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
 	return mgr
 }
 
-// ptpStartupTimeout caps how long the transmitter waits for a grandmaster
-// before falling back to the static offset, so a network without PTP still
-// produces a Dante device instead of hanging.
+// ptpStartupTimeout caps the wait for a grandmaster, so a network without PTP
+// still produces a Dante device instead of hanging.
 func ptpStartupTimeout() time.Duration {
 	if v := os.Getenv("DANTE_PTP_STARTUP_TIMEOUT_S"); v != "" {
 		if secs, err := strconv.ParseFloat(v, 64); err == nil && secs >= 0 {
@@ -100,12 +99,10 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 
 	masterBuf := make([]byte, bytesPerTick)
 
-	// Hold the transmitter until the media clock has been pinned to the
-	// grandmaster. The first PTP measurement steps the clock by the whole
-	// difference between CLOCK_REALTIME and the master's free-running counter,
-	// which Inferno reports as "media clock jumped" before tearing the
-	// transmitter down. Taking that step before anything is on the wire costs a
-	// second of startup and avoids the dropout entirely.
+	// Hold the transmitter until the media clock is pinned to the grandmaster.
+	// The first measurement steps the clock by the master's whole epoch, which
+	// Inferno reacts to by tearing the transmitter down. A second of startup
+	// buys landing that step before anything is on the wire.
 	if m.discipline != nil {
 		timeout := ptpStartupTimeout()
 		if m.discipline.WaitForLock(timeout) {
@@ -211,8 +208,7 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 }
 
 // audioHealthLoop reports how often a zone queue ran dry, so a glitch can be
-// counted instead of guessed at by ear. Silence here means the mixer never had
-// to substitute silence.
+// counted rather than guessed at by ear. No output means no holes.
 func (m *PlaybackManager) audioHealthLoop() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()

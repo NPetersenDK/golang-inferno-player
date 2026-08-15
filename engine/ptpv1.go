@@ -2,17 +2,14 @@ package engine
 
 // Passive IEEE 1588-2002 (PTPv1) listener and clock discipline.
 //
-// Inferno stamps every outgoing Dante packet with the media clock value
-// (flows_tx.rs: seconds + subsecond-in-samples), and the media clock is
-// CLOCK_REALTIME + the Shift we hand it over usrvclock. The receiver compares
-// that stamp against the Dante grandmaster and drops anything older than the
-// flow latency, so Shift has to equal (grandmaster time - CLOCK_REALTIME).
+// Inferno stamps outgoing packets with CLOCK_REALTIME + the Shift we serve over
+// usrvclock, and the receiver drops anything older than the flow latency. So
+// Shift has to equal (grandmaster time - CLOCK_REALTIME), measured here from
+// the grandmaster's own Sync / Follow_Up messages.
 //
-// This listener measures that difference from the grandmaster's own Sync /
-// Follow_Up messages. It only listens: no Delay_Req, no BMCA, no stepping of
-// the system clock. That means the one-way path delay is unknown and shows up
-// as a constant bias, but on a switched LAN that is tens of microseconds
-// against a 10 ms jitter buffer budget.
+// Listen only: no Delay_Req, no BMCA, no stepping of the system clock. Path
+// delay is therefore unmeasured and appears as a constant bias of tens of
+// microseconds, against a 10 ms jitter buffer budget.
 
 import (
 	"encoding/binary"
@@ -315,14 +312,12 @@ func (m *PTPMonitor) addSample(localNs, offsetNs int64) {
 	m.refit()
 }
 
-// refit runs a least-squares fit of offset against local time, giving both the
-// phase and the rate difference in one step.
+// refit runs a least-squares fit of offset against local time, giving phase and
+// rate in one step.
 //
-// One-way measurements are biased by the path delay, and that bias is
-// one-sided: queueing only ever makes a packet look later than it was, i.e.
-// makes the measured offset too small. So after the first fit we keep the half
-// of the window with the highest residuals (the least delayed packets) and fit
-// again on those.
+// Path delay biases one-way measurements one-sidedly: queueing only ever makes
+// a packet look later, i.e. the offset too small. So the fit is repeated on the
+// half of the window with the highest residuals, the least delayed packets.
 func (m *PTPMonitor) refit() {
 	n := len(m.samples)
 	if n < ptpMinSamplesForFit {
@@ -534,11 +529,9 @@ func (d *ClockDiscipline) Overlay() (shiftNs int64, freqScale float64) {
 	return d.shiftNs, d.freqScale
 }
 
-// SyncError is how far the media clock we serve currently sits from the
-// measured grandmaster. This is the figure that decides whether a Dante
-// receiver accepts a packet, so it is the meaningful "how good is the sync"
-// number - it is not the network path delay, which a listen-only implementation
-// never measures.
+// SyncError is how far the media clock we serve sits from the measured
+// grandmaster, which is what decides whether a receiver accepts a packet. Not
+// the network path delay, which a listen-only implementation never measures.
 func (d *ClockDiscipline) SyncError() (ns int64, ok bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -551,14 +544,12 @@ func (d *ClockDiscipline) Locked() bool {
 	return d.acquired
 }
 
-// WaitForLock blocks until the grandmaster has been measured for the first
-// time, reporting whether that happened before the timeout.
+// WaitForLock blocks until the grandmaster has been measured, reporting whether
+// that happened before the timeout.
 //
-// The first measurement moves the media clock by whatever the grandmaster's
-// epoch happens to be. A Dante master runs a free-running counter rather than
-// wall time, so that step is years wide: Inferno logs "media clock jumped",
-// rebootstraps every flow and drops the ALSA stream. Callers use this to make
-// sure the step lands before anything is transmitting.
+// The first measurement steps the media clock by the grandmaster's whole epoch,
+// which for a free-running counter is years. Inferno reacts by rebootstrapping
+// every flow, so callers use this to land the step before anything transmits.
 func (d *ClockDiscipline) WaitForLock(timeout time.Duration) bool {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()

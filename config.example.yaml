@@ -57,22 +57,30 @@ zones:
   # For Spotify, docker/compose.spotify.yml is a complete stack that runs the
   # producer alongside the streamer; use it instead of docker/compose.yml.
   #
-  # - id: 4
-  #   name: "Spotify"
-  #   dante_left: "Spotify L (Ch 7)"
-  #   dante_right: "Spotify R (Ch 8)"
-  #   source:
-  #     type: pipe
-  #     path: "/tmp/dante_player/spotify.pcm"
-  #     label: "Spotify"
-  #     # Raw PCM the producer writes. These defaults match librespot's pipe
-  #     # backend; FFmpeg resamples to the 48 kHz Dante clock.
-  #     format: s16le
-  #     sample_rate: 44100
-  #     channels: 2
-  #     # A local producer is far steadier than an internet stream, so a source
-  #     # zone can buffer much less and stay responsive. Defaults to 1000 ms.
-  #     prebuffer_ms: 300
+  - id: 4
+    name: "Spotify"
+    dante_left: "Spotify L (Ch 7)"
+    dante_right: "Spotify R (Ch 8)"
+    source:
+      type: pipe
+      path: "/tmp/dante_player/spotify.pcm"
+      label: "Spotify"
+      # Raw PCM the producer writes. These defaults match librespot's pipe
+      # backend; FFmpeg resamples to the 48 kHz Dante clock.
+      format: s16le
+      sample_rate: 44100
+      channels: 2
+      # A local producer is far steadier than an internet stream, so a source
+      # zone can buffer much less and stay responsive. Defaults to 1000 ms.
+      prebuffer_ms: 300
+      # buffer_ms caps the queue and is what sets the latency you hear. The
+      # producer is held back by backpressure rather than paced by a network,
+      # so it keeps the queue full - the cap is the steady state, not the
+      # prebuffer. It also decides how much already-queued audio must drain
+      # before a track change in the app reaches the speakers. Defaults to
+      # twice prebuffer_ms. Lower it if Spotify Connect feels laggy, raise it
+      # if you hear dropouts.
+      buffer_ms: 600
   # ----------------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------
