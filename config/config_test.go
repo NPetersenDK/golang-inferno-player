@@ -64,33 +64,46 @@ zones:
 	}
 }
 
-// The env knobs exist so latency can be tuned from the compose file without
-// editing a mounted config, so they have to beat the file.
-func TestSourceBufferEnvOverridesConfig(t *testing.T) {
+// The env knobs are defaults for zones that say nothing. Two sources on one Pi
+// have opposite needs - an interactive producer wants low latency, a radio
+// wants depth - so a zone that states its own values must keep them.
+func TestSourceBufferEnvIsOnlyADefault(t *testing.T) {
 	t.Setenv("DANTE_SOURCE_PREBUFFER_MS", "150")
 	t.Setenv("DANTE_SOURCE_BUFFER_MS", "300")
 
 	cfg, err := LoadConfig(writeConfig(t, `
 zones:
+  - id: 3
+    source:
+      type: pipe
+      path: /tmp/radio.pcm
+      realtime: true
+      prebuffer_ms: 1000
+      buffer_ms: 4000
   - id: 4
     source:
       type: pipe
       path: /tmp/linein.pcm
-      prebuffer_ms: 1000
-      buffer_ms: 4000
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := cfg.Zones[0].Source
-	if src.PrebufferMs != 150 || src.BufferMs != 300 {
-		t.Errorf("got prebuffer %d / buffer %d, want 150 / 300", src.PrebufferMs, src.BufferMs)
+
+	radio := cfg.Zones[0].Source
+	if radio.PrebufferMs != 1000 || radio.BufferMs != 4000 {
+		t.Errorf("configured zone got prebuffer %d / buffer %d, want its own 1000 / 4000",
+			radio.PrebufferMs, radio.BufferMs)
+	}
+
+	quiet := cfg.Zones[1].Source
+	if quiet.PrebufferMs != 150 || quiet.BufferMs != 300 {
+		t.Errorf("unconfigured zone got prebuffer %d / buffer %d, want the env 150 / 300",
+			quiet.PrebufferMs, quiet.BufferMs)
 	}
 }
 
-// Overriding only the prebuffer must recompute the default rather than leave
-// the file's larger buffer in place.
-func TestPrebufferEnvRecomputesBufferDefault(t *testing.T) {
+// The env prebuffer still has to produce a matching buffer default.
+func TestEnvPrebufferGetsItsOwnBufferDefault(t *testing.T) {
 	t.Setenv("DANTE_SOURCE_PREBUFFER_MS", "150")
 
 	cfg, err := LoadConfig(writeConfig(t, `
@@ -99,13 +112,12 @@ zones:
     source:
       type: pipe
       path: /tmp/linein.pcm
-      prebuffer_ms: 1000
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := cfg.Zones[0].Source.BufferMs; got != 300 {
-		t.Errorf("buffer_ms %d, want 300 (twice the overridden prebuffer)", got)
+		t.Errorf("buffer_ms %d, want 300 (twice the env prebuffer)", got)
 	}
 }
 

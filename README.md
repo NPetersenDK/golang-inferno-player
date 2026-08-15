@@ -216,6 +216,8 @@ A pipe producer is held back by backpressure rather than paced by a network, so 
 |---|---|---|
 | `DANTE_SOURCE_BUFFER_MS` | 2× prebuffer | Queue cap. The largest single contributor |
 | `DANTE_SOURCE_PREBUFFER_MS` | 1000 | Fill level before a zone starts delivering |
+
+The two source values are defaults for zones that state nothing; a zone with its own `prebuffer_ms` or `buffer_ms` keeps them. Sources differ: an interactive producer wants the shortest buffer it can hold, while a radio wants a deep one because latency does not matter and its clock is its own.
 | `DANTE_ALSA_BUFFER_US` | 250000 | ALSA playback buffer, all zones |
 | `DANTE_FIFO_BYTES` | 16384 | Kernel buffer behind a source FIFO |
 

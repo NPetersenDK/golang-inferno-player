@@ -205,7 +205,6 @@ func LoadConfig(path string) (*AppConfig, error) {
 		if cfg.Zones[i].AlsaDevice == "" {
 			cfg.Zones[i].AlsaDevice = fmt.Sprintf("dante_zone%d", cfg.Zones[i].ID)
 		}
-		cfg.Zones[i].Source.applyDefaults(&cfg.Zones[i], cfg.PipeDir)
 	}
 
 	// Sync Stations & Presets for API backward compatibility
@@ -253,8 +252,10 @@ func (c *AppConfig) applyEnvOverrides() {
 		c.Tuner.Enabled = on
 	}
 
-	// Latency knobs for source zones, so they can be tuned from the compose
-	// file without editing a mounted config.
+	// Latency defaults for source zones, so they can be tuned from the compose
+	// file without editing a mounted config. A zone that states its own value
+	// keeps it: sources have opposite needs, and one number cannot serve a
+	// low-latency interactive producer and a radio that wants a deep buffer.
 	prebuffer := envInt("DANTE_SOURCE_PREBUFFER_MS")
 	buffer := envInt("DANTE_SOURCE_BUFFER_MS")
 	for i := range c.Zones {
@@ -262,11 +263,10 @@ func (c *AppConfig) applyEnvOverrides() {
 		if src == nil {
 			continue
 		}
-		if prebuffer > 0 {
+		if prebuffer > 0 && src.PrebufferMs == 0 {
 			src.PrebufferMs = prebuffer
-			src.BufferMs = 0 // recompute the default from the new prebuffer
 		}
-		if buffer > 0 {
+		if buffer > 0 && src.BufferMs == 0 {
 			src.BufferMs = buffer
 		}
 		src.applyDefaults(&c.Zones[i], c.PipeDir)
