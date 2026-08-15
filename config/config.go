@@ -13,13 +13,39 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ZoneSource turns a zone into a permanent feed from an external producer
+// instead of a station browser slot. The engine only knows how to read raw PCM
+// from a FIFO; what writes to that FIFO - librespot, shairport-sync, anything
+// else - is entirely outside this project. Leave it unset and the zone behaves
+// exactly as before.
+type ZoneSource struct {
+	// Type selects the mechanism. Only "pipe" exists today.
+	Type string `json:"type" yaml:"type"`
+	// Path is the FIFO to read. Created at startup if missing.
+	Path string `json:"path" yaml:"path"`
+	// Label is what the UI shows for this zone, e.g. "Spotify".
+	Label string `json:"label,omitempty" yaml:"label,omitempty"`
+
+	// Raw PCM layout the producer writes. Defaults suit librespot's pipe
+	// backend, which emits S16LE stereo at 44.1 kHz.
+	Format     string `json:"format,omitempty" yaml:"format,omitempty"`
+	SampleRate int    `json:"sample_rate,omitempty" yaml:"sample_rate,omitempty"`
+	Channels   int    `json:"channels,omitempty" yaml:"channels,omitempty"`
+
+	// PrebufferMs overrides the zone queue depth. A local producer is far
+	// steadier than an internet stream, so a source zone can run much shorter
+	// than the default and stay responsive.
+	PrebufferMs int `json:"prebuffer_ms,omitempty" yaml:"prebuffer_ms,omitempty"`
+}
+
 type ZoneConfig struct {
-	ID         int    `json:"id" yaml:"id"`
-	Name       string `json:"name" yaml:"name"`
-	DanteLeft  string `json:"dante_left" yaml:"dante_left"`
-	DanteRight string `json:"dante_right" yaml:"dante_right"`
-	AlsaDevice string `json:"alsa_device,omitempty" yaml:"alsa_device,omitempty"`
-	PipePath   string `json:"pipe_path" yaml:"pipe_path"`
+	ID         int         `json:"id" yaml:"id"`
+	Name       string      `json:"name" yaml:"name"`
+	DanteLeft  string      `json:"dante_left" yaml:"dante_left"`
+	DanteRight string      `json:"dante_right" yaml:"dante_right"`
+	AlsaDevice string      `json:"alsa_device,omitempty" yaml:"alsa_device,omitempty"`
+	PipePath   string      `json:"pipe_path" yaml:"pipe_path"`
+	Source     *ZoneSource `json:"source,omitempty" yaml:"source,omitempty"`
 }
 
 type StationPreset struct {
@@ -43,6 +69,33 @@ type AppConfig struct {
 	Stations   []StationPreset `json:"stations" yaml:"stations"`
 	Presets    []StationPreset `json:"presets,omitempty" yaml:"presets,omitempty"` // backward compat
 	mu         sync.RWMutex    `json:"-" yaml:"-"`
+}
+
+// applyDefaults fills in the raw PCM layout a producer is assumed to write.
+// Called on a nil receiver for every zone without a source, where it does
+// nothing.
+func (s *ZoneSource) applyDefaults(zone *ZoneConfig, pipeDir string) {
+	if s == nil {
+		return
+	}
+	if s.Type == "" {
+		s.Type = "pipe"
+	}
+	if s.Path == "" {
+		s.Path = filepath.Join(pipeDir, fmt.Sprintf("source_%d.pcm", zone.ID))
+	}
+	if s.Label == "" {
+		s.Label = zone.Name
+	}
+	if s.Format == "" {
+		s.Format = "s16le"
+	}
+	if s.SampleRate <= 0 {
+		s.SampleRate = 44100
+	}
+	if s.Channels <= 0 {
+		s.Channels = 2
+	}
 }
 
 func DefaultConfig() *AppConfig {
@@ -114,6 +167,7 @@ func LoadConfig(path string) (*AppConfig, error) {
 		if cfg.Zones[i].AlsaDevice == "" {
 			cfg.Zones[i].AlsaDevice = fmt.Sprintf("dante_zone%d", cfg.Zones[i].ID)
 		}
+		cfg.Zones[i].Source.applyDefaults(&cfg.Zones[i], cfg.PipeDir)
 	}
 
 	// Sync Stations & Presets for API backward compatibility

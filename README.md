@@ -140,6 +140,46 @@ The entrypoint script automatically:
 | POST | /api/stop-all | Stops playback on all zones simultaneously |
 | GET | /api/events | Server-Sent Events (SSE) stream for real-time state synchronization |
 
+## Optional: External Audio Sources (Spotify, AirPlay, ...)
+
+A zone can be dedicated to an external producer instead of the station browser. Give it a `source` block in `config.yaml`:
+
+```yaml
+  - id: 4
+    name: "Spotify"
+    dante_left: "Spotify L (Ch 7)"
+    dante_right: "Spotify R (Ch 8)"
+    source:
+      type: pipe
+      path: "/tmp/dante_player/spotify.pcm"
+      label: "Spotify"
+      prebuffer_ms: 300
+```
+
+The zone then attaches to that FIFO at startup and stays there permanently: it drops out of the station target list, Stop All leaves it alone, and its Dante channel pair becomes a fixed feed you can patch in your mixer.
+
+The engine only knows how to read raw PCM from a FIFO — it has no idea what Spotify is. Anything that can write to a pipe works, and FFmpeg resamples whatever rate the producer uses to the 48 kHz Dante clock. Nothing in the base image depends on any of this: omit the `source` block and the feature does not exist.
+
+### Sharing the pipe between containers
+
+Mount the same named volume at the same path in both containers. A FIFO is an inode on a filesystem, so once both see the same directory they are looking at the same pipe, and it behaves exactly as it would between two processes on one host.
+
+`docker-compose.spotify.yml` is a complete stack — use it **instead of** `docker-compose.yml`, not alongside it:
+
+```bash
+docker compose -f docker-compose.spotify.yml up -d
+```
+
+The two files therefore duplicate the `dante-streamer` service. If you change the base file, mirror it here.
+
+The player creates the FIFO with mode `0666` inside a directory it chmods to `0777`, because the producer usually runs as a different user, and it holds the pipe open read-write for its whole life so a producer that pauses or disconnects never reaches the reader as EOF. If the producer starts first and creates a plain file at the path, the player replaces it with a real FIFO and logs that it did.
+
+### Choosing a Spotify Connect implementation
+
+Note that **raspotify is not an alternative to librespot — it packages librespot**. It is a Debian package that installs the same player as a systemd service on Raspberry Pi OS, so it neither escapes librespot nor fits a container well. Running librespot directly is strictly simpler.
+
+If you want a genuinely different implementation, `go-librespot` is a separate reimplementation with its own pipe and ALSA outputs. Either way, the choice is entirely yours: the engine only requires raw PCM on a FIFO, so swapping the producer is a change to the compose overlay and nothing else.
+
 ## PTP Clock Synchronization & Embedded `usrvclock` Driver
 
 Dante Audio over IP requires high-precision PTPv1 clock synchronization (IEEE 1588-2002).

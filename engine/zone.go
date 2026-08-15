@@ -3,11 +3,14 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math"
+	"os"
 	"os/exec"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,6 +45,10 @@ const (
 	// delivering, leaving roughly a second of slack in both directions.
 	zonePrebufferChunks = 50 // 1 s
 
+	// zoneChunkMillis is the wall time one chunk represents, used to convert a
+	// configured prebuffer in milliseconds into chunks.
+	zoneChunkMillis = 20
+
 	// zoneStallChunks is how long the queue must stay empty before the zone is
 	// treated as stalled rather than momentarily short. Rebuilding the whole
 	// prebuffer costs a second of silence, so it must not be triggered by the
@@ -61,6 +68,8 @@ type ZoneState struct {
 	StationName  string         `json:"station_name"`
 	Volume       int            `json:"volume"` // 0-100
 	Muted        bool           `json:"muted"`
+	IsSource     bool           `json:"is_source"`
+	SourceLabel  string         `json:"source_label,omitempty"`
 	PeakLeft     float64        `json:"peak_left"`  // 0.0 - 1.0
 	PeakRight    float64        `json:"peak_right"` // 0.0 - 1.0
 	ErrorMessage string         `json:"error_message,omitempty"`
@@ -87,23 +96,44 @@ type ZonePlayer struct {
 	emptyPulls  atomic.Int64
 	starvations atomic.Uint64
 
+	// prebufferChunks is per zone: a local producer feeding a FIFO is far
+	// steadier than an internet stream and can run much shorter.
+	prebufferChunks int
+
 	cancelFunc context.CancelFunc
 	stateChan  chan struct{}
 	audioChan  chan []int32 // stereo audio frames (interleaved L, R)
+	fifoKeep   *os.File     // holds a source FIFO open so it never signals EOF
 }
 
 func NewZonePlayer(cfg config.ZoneConfig, stateChan chan struct{}) *ZonePlayer {
 	z := &ZonePlayer{
-		cfg:       cfg,
-		status:    StatusIdle,
-		volume:    85,
-		muted:     false,
-		stateChan: stateChan,
-		audioChan: make(chan []int32, zoneQueueChunks),
+		cfg:             cfg,
+		status:          StatusIdle,
+		volume:          85,
+		muted:           false,
+		stateChan:       stateChan,
+		audioChan:       make(chan []int32, zoneQueueChunks),
+		prebufferChunks: zonePrebufferChunks,
+	}
+	if cfg.Source != nil && cfg.Source.PrebufferMs > 0 {
+		chunks := cfg.Source.PrebufferMs / zoneChunkMillis
+		if chunks < 1 {
+			chunks = 1
+		} else if chunks > zoneQueueChunks/2 {
+			chunks = zoneQueueChunks / 2
+		}
+		z.prebufferChunks = chunks
 	}
 	z.setPeakL(0)
 	z.setPeakR(0)
 	return z
+}
+
+// IsSource reports whether this zone is permanently fed by an external
+// producer rather than being a station browser slot.
+func (z *ZonePlayer) IsSource() bool {
+	return z.cfg.Source != nil
 }
 
 func (z *ZonePlayer) GetState() ZoneState {
@@ -122,10 +152,19 @@ func (z *ZonePlayer) GetState() ZoneState {
 		StationName:  z.stationName,
 		Volume:       z.volume,
 		Muted:        z.muted,
+		IsSource:     z.cfg.Source != nil,
+		SourceLabel:  sourceLabel(z.cfg.Source),
 		PeakLeft:     z.getPeakL(),
 		PeakRight:    z.getPeakR(),
 		ErrorMessage: z.errMessage,
 	}
+}
+
+func sourceLabel(src *config.ZoneSource) string {
+	if src == nil {
+		return ""
+	}
+	return src.Label
 }
 
 func (z *ZonePlayer) SetVolume(vol int) {
@@ -150,6 +189,12 @@ func (z *ZonePlayer) ToggleMute() bool {
 }
 
 func (z *ZonePlayer) Stop() {
+	// A source zone is a permanent feed from an external producer, not
+	// something the station browser owns. Stop All must leave it alone.
+	if z.IsSource() {
+		return
+	}
+
 	z.mu.Lock()
 	if z.cancelFunc != nil {
 		z.cancelFunc()
@@ -174,7 +219,81 @@ func (z *ZonePlayer) Stop() {
 	z.notifyState()
 }
 
+// StartSource attaches the zone to its configured producer for good. It is a
+// no-op for zones without a source, so callers need no special casing.
+func (z *ZonePlayer) StartSource() error {
+	if !z.IsSource() {
+		return nil
+	}
+	src := z.cfg.Source
+	if src.Type != "pipe" {
+		return fmt.Errorf("zone %d: unknown source type %q", z.cfg.ID, src.Type)
+	}
+
+	keep, err := ensureFIFO(src.Path)
+	if err != nil {
+		z.setError(fmt.Sprintf("Source pipe unavailable: %v", err))
+		return err
+	}
+	z.fifoKeep = keep
+
+	z.mu.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	z.cancelFunc = cancel
+	z.status = StatusBuffering
+	z.stationID = "source"
+	z.stationName = src.Label
+	z.title = src.Label
+	z.streamURL = src.Path
+	z.errMessage = ""
+	z.primed = false
+	z.mu.Unlock()
+	z.notifyState()
+
+	log.Printf("[Zone %d] Source %q reading %s PCM %d Hz from %s (prebuffer %d ms)",
+		z.cfg.ID, src.Label, src.Format, src.SampleRate, src.Path, z.prebufferChunks*zoneChunkMillis)
+
+	go z.sourceLoop(ctx, *src)
+	return nil
+}
+
+// sourceLoop keeps a decoder attached to the FIFO. FFmpeg does the resampling,
+// so a 44.1 kHz producer such as librespot lands on the 48 kHz Dante clock
+// without the producer having to know anything about it.
+func (z *ZonePlayer) sourceLoop(ctx context.Context, src config.ZoneSource) {
+	args := []string{
+		"-hide_banner",
+		"-loglevel", "error",
+		"-f", src.Format,
+		"-ar", strconv.Itoa(src.SampleRate),
+		"-ac", strconv.Itoa(src.Channels),
+		"-i", src.Path,
+		"-vn",
+		"-f", "s32le",
+		"-ar", "48000",
+		"-ac", "2",
+		"-",
+	}
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := z.decodeInto(ctx, args); err != nil && ctx.Err() == nil {
+			log.Printf("[Zone %d] Source decoder stopped: %v, restarting", z.cfg.ID, err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 func (z *ZonePlayer) Play(preset *config.StationPreset, customURL string, customTitle string) error {
+	if z.IsSource() {
+		return fmt.Errorf("zone %d is a %s source and cannot play stations", z.cfg.ID, z.cfg.Source.Label)
+	}
 	z.Stop()
 
 	var streamURL, stationID, stationName string
@@ -231,23 +350,6 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 		"-",
 	}
 
-	ffmpegCmd := exec.CommandContext(ctx, "ffmpeg", ffmpegArgs...)
-	stdout, err := ffmpegCmd.StdoutPipe()
-	if err != nil {
-		z.setError(fmt.Sprintf("Failed to open decoder pipe: %v", err))
-		return
-	}
-
-	if err := ffmpegCmd.Start(); err != nil {
-		z.setError(fmt.Sprintf("Decoder start failed: %v", err))
-		return
-	}
-	defer func() {
-		if ffmpegCmd.Process != nil {
-			_ = ffmpegCmd.Process.Kill()
-		}
-	}()
-
 	// Status stays Buffering until PullSamples has built the prebuffer, so the
 	// UI reflects when a zone is actually feeding the mixer. This also covers
 	// the reconnect path, where the zone was Playing a moment ago.
@@ -258,53 +360,75 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 	z.emptyPulls.Store(0)
 	z.notifyState()
 
+	err := z.decodeInto(ctx, ffmpegArgs)
+	if ctx.Err() != nil {
+		return
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		log.Printf("[Zone %d] Stream EOF, reconnecting in 2s...", z.cfg.ID)
+		time.Sleep(2 * time.Second)
+		if ctx.Err() == nil {
+			go z.streamLoop(ctx, streamURL)
+		}
+		return
+	}
+	z.setError(fmt.Sprintf("Stream read error: %v", err))
+}
+
+// decodeInto runs FFmpeg with the given arguments and pumps its raw 48 kHz
+// stereo output into the zone queue until it exits or the context is cancelled.
+// Both the station path and the source path share it, so they get identical
+// buffering behaviour.
+func (z *ZonePlayer) decodeInto(ctx context.Context, args []string) error {
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("open decoder pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("decoder start: %w", err)
+	}
+	defer func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	}()
+
 	// Chunk size: 960 frames (20ms at 48kHz) * 2 channels * 4 bytes = 7680 bytes
 	rawBuf := make([]byte, 7680)
 
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 
 		n, err := io.ReadFull(stdout, rawBuf)
 		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				log.Printf("[Zone %d] Stream EOF, reconnecting in 2s...", z.cfg.ID)
-				time.Sleep(2 * time.Second)
-				if ctx.Err() == nil {
-					go z.streamLoop(ctx, streamURL)
-				}
-				return
-			}
-			z.setError(fmt.Sprintf("Stream read error: %v", err))
-			return
+			return err
+		}
+		if n <= 0 {
+			continue
 		}
 
-		if n > 0 {
-			numSamples := n / 4
-			samples := make([]int32, numSamples)
-			for i := 0; i < numSamples; i++ {
-				samples[i] = int32(binary.LittleEndian.Uint32(rawBuf[i*4 : (i+1)*4]))
-			}
+		numSamples := n / 4
+		samples := make([]int32, numSamples)
+		for i := 0; i < numSamples; i++ {
+			samples[i] = int32(binary.LittleEndian.Uint32(rawBuf[i*4 : (i+1)*4]))
+		}
 
-			// Send samples non-blocking to master audio mixer
+		select {
+		case z.audioChan <- samples:
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			// Queue full: drop the oldest chunk, which bounds added latency
+			// when the producer outruns the Dante clock.
 			select {
-			case z.audioChan <- samples:
-			case <-ctx.Done():
-				return
+			case <-z.audioChan:
 			default:
-				// If channel is full, drop older frame to keep realtime sync
-				select {
-				case <-z.audioChan:
-				default:
-				}
-				z.audioChan <- samples
 			}
+			z.audioChan <- samples
 		}
 	}
 }
@@ -330,7 +454,7 @@ func (z *ZonePlayer) PullSamples(numFrames int) ([]int32, bool) {
 	}
 
 	if !primed {
-		if len(z.audioChan) < zonePrebufferChunks {
+		if len(z.audioChan) < z.prebufferChunks {
 			z.decayPeaks()
 			return nil, false
 		}

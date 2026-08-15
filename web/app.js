@@ -128,12 +128,21 @@ function updateHeader() {
 function syncZoneDropdowns() {
   if (!systemState.zones || systemState.zones.length === 0) return;
 
+  // Source zones are permanently fed by an external producer, so they are not
+  // valid targets for a station.
+  const selectable = systemState.zones.filter(z => !z.is_source);
+  if (selectable.length === 0) return;
+
+  if (!selectable.some(z => z.id === activeZoneId)) {
+    activeZoneId = selectable[0].id;
+  }
+
   // Only touch the selects when the zone list itself changes. Rewriting their
   // options on every update closes an open dropdown while you are using it.
-  const signature = systemState.zones.map(z => `${z.id}:${z.name || ""}`).join("|");
+  const signature = selectable.map(z => `${z.id}:${z.name || ""}`).join("|");
   if (signature !== zoneDropdownSignature) {
     zoneDropdownSignature = signature;
-    const zoneOptions = systemState.zones.map(z =>
+    const zoneOptions = selectable.map(z =>
       `<option value="${z.id}">${escapeHtml(z.name || `Zone ${z.id}`)}</option>`
     ).join("");
     targetZoneSelect.innerHTML = zoneOptions;
@@ -276,6 +285,7 @@ function createZoneNode(zone) {
 
   root.addEventListener("click", (e) => {
     if (e.target.tagName === "BUTTON" || e.target.tagName === "INPUT" || e.target.closest("button")) return;
+    if (zone.is_source) return; // cannot be a station target
     activeZoneId = zone.id;
     targetZoneSelect.value = zone.id;
     renderZones();
@@ -288,20 +298,25 @@ function updateZoneNode(refs, zone) {
   const isPlaying = (zone.status === "playing");
   const isBuffering = (zone.status === "buffering");
 
-  refs.root.classList.toggle("active-zone", zone.id === activeZoneId);
+  refs.root.classList.toggle("active-zone", !zone.is_source && zone.id === activeZoneId);
   refs.root.classList.toggle("playing-zone", isPlaying);
 
   setText(refs.name, zone.name || "");
   setText(refs.channels, `${zone.dante_left || ""} / ${zone.dante_right || ""}`);
   setText(refs.station, zone.station_name || "No stream");
 
-  if (zone.status !== refs.lastStatus) {
-    refs.lastStatus = zone.status;
+  const statusKey = `${zone.status}/${zone.is_source}`;
+  if (statusKey !== refs.lastStatus) {
+    refs.lastStatus = statusKey;
+    // A source zone is never idle in the station sense: it is wired to a
+    // producer and simply waiting for it to send something.
     refs.badge.innerHTML = isPlaying
       ? '<span class="badge text-bg-success"><i class="fa-solid fa-play fa-xs me-1"></i>Playing</span>'
       : isBuffering
         ? '<span class="badge text-bg-warning"><i class="fa-solid fa-spinner fa-spin fa-xs me-1"></i>Buffering</span>'
-        : '<span class="badge text-bg-secondary">Idle</span>';
+        : zone.is_source
+          ? '<span class="badge text-bg-secondary"><i class="fa-solid fa-plug fa-xs me-1"></i>Waiting</span>'
+          : '<span class="badge text-bg-secondary">Idle</span>';
   }
 
   const peakLPct = isPlaying ? Math.min(100, Math.round((zone.peak_left || 0) * 100)) : 0;
@@ -319,7 +334,9 @@ function updateZoneNode(refs, zone) {
   }
   refs.slider.title = `Volume: ${zone.volume}%`;
 
-  const canStop = isPlaying || isBuffering;
+  // Stop is meaningless on a source zone: the producer owns playback.
+  refs.stopBtn.hidden = !!zone.is_source;
+  const canStop = !zone.is_source && (isPlaying || isBuffering);
   if (refs.stopBtn.disabled === canStop) refs.stopBtn.disabled = !canStop;
 }
 

@@ -44,6 +44,37 @@ zones:
     dante_right: "Zone 4 R (Ch 8)"
     pipe_path: "/tmp/dante_player/zone_4.pcm"
 
+  # ----------------------------------------------------------------------------
+  # Optional: dedicate a zone to an external producer instead of the station
+  # browser. Add a "source" block and the zone attaches to that FIFO at startup
+  # and stays there: it drops out of the station target list, Stop All leaves it
+  # alone, and its Dante channel pair becomes a permanent feed.
+  #
+  # The engine only knows how to read raw PCM from a FIFO. What writes to it is
+  # up to you - librespot for Spotify Connect, shairport-sync for AirPlay, or
+  # anything else. Omit the block entirely and nothing about the zone changes.
+  #
+  # For Spotify, docker-compose.spotify.yml is a complete stack that runs the
+  # producer alongside the streamer; use it instead of docker-compose.yml.
+  #
+  # - id: 4
+  #   name: "Spotify"
+  #   dante_left: "Spotify L (Ch 7)"
+  #   dante_right: "Spotify R (Ch 8)"
+  #   source:
+  #     type: pipe
+  #     path: "/tmp/dante_player/spotify.pcm"
+  #     label: "Spotify"
+  #     # Raw PCM the producer writes. These defaults match librespot's pipe
+  #     # backend; FFmpeg resamples to the 48 kHz Dante clock.
+  #     format: s16le
+  #     sample_rate: 44100
+  #     channels: 2
+  #     # A local producer is far steadier than an internet stream, so a source
+  #     # zone can buffer much less and stay responsive. Defaults to 1000 ms.
+  #     prebuffer_ms: 300
+  # ----------------------------------------------------------------------------
+
 # ------------------------------------------------------------------------------
 # Radio Stations & Audio Streams
 # ------------------------------------------------------------------------------

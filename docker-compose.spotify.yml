@@ -1,0 +1,106 @@
+# Full stack: Dante streamer plus a Spotify Connect source.
+#
+# Standalone - use this INSTEAD of docker-compose.yml, not alongside it:
+#
+#   docker compose -f docker-compose.spotify.yml up -d
+#
+# Nothing in the base project depends on this file, and the main image contains
+# no Spotify code. The engine only knows how to read raw PCM from a FIFO;
+# librespot is simply one thing that can write to one. Swap it for
+# shairport-sync or anything else and the engine needs no changes.
+#
+# Give a zone a matching source block in config.yaml:
+#
+#   - id: 4
+#     name: Spotify
+#     dante_left: "Spotify L (Ch 7)"
+#     dante_right: "Spotify R (Ch 8)"
+#     source:
+#       type: pipe
+#       path: /tmp/dante_player/spotify.pcm
+#       label: Spotify
+#       prebuffer_ms: 300
+#
+# The zone then belongs to Spotify permanently: it disappears from the station
+# target list and Stop All leaves it alone.
+#
+# How the two containers share the pipe
+# -------------------------------------
+# A named volume mounted at the same path in both. A FIFO is an inode on a
+# filesystem, not a network object, so once both containers have the same
+# directory mounted they are looking at the same pipe and it works exactly as it
+# would between two processes on one host.
+#
+# dante-streamer creates the FIFO (mode 0666, in a directory it chmods to 0777)
+# because the producer may run as a different user. It also holds the pipe open
+# read-write for its whole life, so pausing or disconnecting the producer never
+# reaches the reader as EOF.
+#
+# Start order is not guaranteed by depends_on, only container start is. If the
+# producer wins the race and creates a plain file at the path, dante-streamer
+# replaces it with a real FIFO and logs that it did. Combined with
+# restart: unless-stopped on the producer, the pair converges on its own.
+
+services:
+  dante-streamer:
+    image: ghcr.io/npetersendk/golang-inferno-player:latest
+    container_name: dante-streamer
+    restart: unless-stopped
+    # Host networking gives direct access to the USB Dante adapter, multicast & PTP clock
+    network_mode: host
+    environment:
+      # Network interface dedicated to Dante (e.g. eth1, usb0, enx..., or built-in eth0/end0)
+      - DANTE_INTERFACE=eth1
+      - INFERNO_NAME=Dante-Pi
+      - INFERNO_TX_CHANNELS=8
+      - INFERNO_SAMPLE_RATE=48000
+      - HTTP_PORT=8085
+    cap_add:
+      # NET_ADMIN: entrypoint sets allmulticast and rp_filter on the Dante NIC.
+      # SYS_NICE: real-time priority for the Inferno transmit thread.
+      # SYS_TIME is deliberately absent - the PTP listener never touches the
+      # system clock, it serves an overlay on top of it instead.
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    ulimits:
+      rtprio: 95
+      memlock: -1
+    volumes:
+      # Mount your custom config.yaml (copy from config.example.yaml)
+      - ./config.yaml:/opt/dante-player/config.yaml:ro
+      # Persistent storage for Dante Device State (so Dante Controller routing is never lost)
+      - dante_state:/root/.local/state/inferno_aoip
+      # Shared memory for low-latency audio buffering
+      - /dev/shm:/dev/shm
+      # The FIFO directory shared with the producer below
+      - dante_pipes:/tmp/dante_player
+
+  librespot:
+    # NOTE: verify this image reference before relying on it, and see the README
+    # on picking a Spotify Connect implementation. Nothing else in this file or
+    # in the project depends on which one you use - it only has to write raw PCM
+    # to the FIFO below.
+    image: ghcr.io/librespot-org/librespot:latest
+    container_name: dante-librespot
+    restart: unless-stopped
+    # Spotify Connect advertises itself over zeroconf, so it needs the host
+    # network to be discoverable from phones on the LAN.
+    network_mode: host
+    depends_on:
+      - dante-streamer
+    volumes:
+      - dante_pipes:/tmp/dante_player
+    command: >
+      --name "Dante-Pi"
+      --backend pipe
+      --device /tmp/dante_player/spotify.pcm
+      --bitrate 320
+      --initial-volume 100
+      --volume-ctrl fixed
+
+volumes:
+  dante_state:
+    name: dante_pi_state
+  dante_pipes:
+    name: dante_pi_pipes

@@ -94,6 +94,69 @@ func drainZone(t *testing.T, z *ZonePlayer, chunks int) {
 	}
 }
 
+// A source zone belongs to its producer: the station browser must not be able
+// to take it over, and Stop All must not silence it.
+func TestSourceZoneRejectsStationControl(t *testing.T) {
+	z := NewZonePlayer(config.ZoneConfig{
+		ID:     4,
+		Name:   "Spotify",
+		Source: &config.ZoneSource{Type: "pipe", Path: "/tmp/spotify.pcm", Label: "Spotify"},
+	}, make(chan struct{}, 100))
+
+	if !z.IsSource() {
+		t.Fatal("zone with a source block did not report as a source")
+	}
+	if err := z.Play(nil, "http://example.com/stream.mp3", "Some Station"); err == nil {
+		t.Error("Play on a source zone was accepted")
+	}
+
+	z.status = StatusPlaying
+	z.Stop()
+	if got := z.GetState().Status; got != StatusPlaying {
+		t.Errorf("status %q after Stop on a source zone, want it untouched (%q)", got, StatusPlaying)
+	}
+
+	if got := z.GetState().SourceLabel; got != "Spotify" {
+		t.Errorf("source label %q, want Spotify", got)
+	}
+}
+
+// prebuffer_ms is what keeps an interactive source responsive, so it has to
+// actually reach the pull path.
+func TestSourcePrebufferOverride(t *testing.T) {
+	z := NewZonePlayer(config.ZoneConfig{
+		ID:     4,
+		Source: &config.ZoneSource{Type: "pipe", Path: "/tmp/spotify.pcm", PrebufferMs: 300},
+	}, make(chan struct{}, 100))
+
+	if want := 300 / zoneChunkMillis; z.prebufferChunks != want {
+		t.Fatalf("prebuffer %d chunks, want %d", z.prebufferChunks, want)
+	}
+
+	z.status = StatusBuffering
+	pushChunks(z, z.prebufferChunks-1)
+	if _, ok := z.PullSamples(960); ok {
+		t.Error("delivered below the configured prebuffer")
+	}
+	pushChunks(z, 1)
+	if _, ok := z.PullSamples(960); !ok {
+		t.Error("did not deliver once the configured prebuffer was reached")
+	}
+}
+
+func TestZoneWithoutSourceIsUnchanged(t *testing.T) {
+	z := newTestZone()
+	if z.IsSource() {
+		t.Error("plain zone reported as a source")
+	}
+	if z.prebufferChunks != zonePrebufferChunks {
+		t.Errorf("prebuffer %d, want the default %d", z.prebufferChunks, zonePrebufferChunks)
+	}
+	if st := z.GetState(); st.IsSource || st.SourceLabel != "" {
+		t.Errorf("plain zone exposed source fields: %+v", st)
+	}
+}
+
 func TestIdleZoneDeliversNothing(t *testing.T) {
 	z := newTestZone()
 	z.status = StatusIdle

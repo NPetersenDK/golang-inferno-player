@@ -55,6 +55,14 @@ func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
 	}
 	sort.Ints(mgr.zoneOrder)
 
+	// Zones wired to an external producer attach themselves and stay attached.
+	// Zones without a source are untouched and idle until someone presses play.
+	for _, id := range mgr.zoneOrder {
+		if err := mgr.zones[id].StartSource(); err != nil {
+			log.Printf("[Zone %d] Source unavailable: %v", id, err)
+		}
+	}
+
 	// Measure the Dante grandmaster passively, then serve the resulting media
 	// clock to Inferno on both socket paths it may look for.
 	mgr.ptp = StartPTPMonitor()
