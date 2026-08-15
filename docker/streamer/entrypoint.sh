@@ -38,6 +38,22 @@ export INFERNO_BIND_IP="$DANTE_IFACE"
 export INFERNO_CLOCK_PATH="/tmp/usrvclock"
 export DANTE_PTP_IFACE="$DANTE_IFACE"
 
+# Give ourselves a device ID in the form every real Dante device uses: the
+# interface MAC widened to EUI-64 by inserting fffe. Inferno otherwise builds
+# one from the IP address, which makes us the only device on the segment with a
+# malformed ID, and means a new DHCP lease looks like a brand new device and
+# loses its routing. Derived from our own OUI, so it cannot collide with an
+# Audinate one. Set INFERNO_DEVICE_ID yourself to override.
+if [ -z "$INFERNO_DEVICE_ID" ]; then
+    IFACE_MAC="$(tr -d ':' < "/sys/class/net/$DANTE_IFACE/address" 2>/dev/null || true)"
+    if [ ${#IFACE_MAC} -eq 12 ]; then
+        export INFERNO_DEVICE_ID="${IFACE_MAC%??????}fffe${IFACE_MAC#??????}"
+        echo "[Dante] Device ID $INFERNO_DEVICE_ID (EUI-64 from $DANTE_IFACE)"
+    else
+        echo "[Dante] WARNING: could not read $DANTE_IFACE MAC; Inferno will derive a device ID from the IP"
+    fi
+fi
+
 # Ensure kernel routes multicast (Dante PTP 224.0.1.129, mDNS 224.0.0.251, Audio 239.255.0.0/16) to Dante NIC
 ip link set "$DANTE_IFACE" multicast on 2>/dev/null || true
 ip link set "$DANTE_IFACE" allmulticast on 2>/dev/null || true
