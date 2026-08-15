@@ -322,6 +322,22 @@ func TestTuneFrequencyRejectsOutOfRange(t *testing.T) {
 	}
 }
 
+// rtl_fm's -g takes a number, so a word parses as 0 dB - the lowest gain the
+// hardware has, which sounds exactly like no signal. Automatic gain is reached
+// by omitting the flag.
+func TestAutoGainOmitsTheFlag(t *testing.T) {
+	for _, gain := range []string{"", "auto", "AUTO"} {
+		tuner := &Tuner{cfg: config.TunerConfig{Gain: gain}}
+		if tuner.usesGainFlag() {
+			t.Errorf("gain %q passed -g to rtl_fm, which would pin it to 0 dB", gain)
+		}
+	}
+	tuner := &Tuner{cfg: config.TunerConfig{Gain: "28.0"}}
+	if !tuner.usesGainFlag() {
+		t.Error("a numeric gain was not passed to rtl_fm")
+	}
+}
+
 // Writing megahertz into a hertz field is the easy mistake, and a preset must
 // be checked as strictly as a typed-in frequency.
 func TestPresetFrequencyIsValidated(t *testing.T) {

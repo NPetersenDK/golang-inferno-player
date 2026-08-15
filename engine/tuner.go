@@ -12,6 +12,11 @@ import (
 	"dante-player/config"
 )
 
+// TunerOutputRate is what rtl_fm -M wbfm emits: mono signed 16-bit at 32 kHz.
+// A zone fed by the tuner must declare exactly this, or FFmpeg reads the stream
+// at the wrong rate and you hear noise.
+const TunerOutputRate = 32000
+
 // TunerState is what the UI and API see.
 type TunerState struct {
 	Enabled     bool                 `json:"enabled"`
@@ -63,6 +68,12 @@ func NewTuner(cfg *config.AppConfig, notify func()) *Tuner {
 	if !zone.Source.Realtime {
 		log.Printf("[Tuner] zone %d source is not marked realtime; an SDR cannot be paused and will overrun", zone.ID)
 	}
+	// A rate or channel mismatch is inaudible as anything but noise, so say it
+	// plainly rather than leaving it to be diagnosed by ear.
+	if zone.Source.SampleRate != TunerOutputRate || zone.Source.Channels != 1 || zone.Source.Format != "s16le" {
+		log.Printf("[Tuner] zone %d source is %s %d Hz %d ch, but rtl_fm emits s16le %d Hz mono - expect noise until they match",
+			zone.ID, zone.Source.Format, zone.Source.SampleRate, zone.Source.Channels, TunerOutputRate)
+	}
 
 	t := &Tuner{cfg: *cfg.Tuner, fifoPath: zone.Source.Path, notify: notify}
 	// rtl_fm lists every attached device with its serial on stderr each time it
@@ -71,6 +82,15 @@ func NewTuner(cfg *config.AppConfig, notify func()) *Tuner {
 	log.Printf("[Tuner] enabled on zone %d, device %q, %d presets",
 		t.cfg.ZoneID, t.deviceArg(), len(t.cfg.Presets))
 	return t
+}
+
+// usesGainFlag reports whether -g should be passed at all.
+//
+// rtl_fm's -g takes a number in dB, and automatic gain is its default, reached
+// only by omitting the flag. Passing a word parses as 0, the lowest gain the
+// hardware has, which is indistinguishable from no signal.
+func (t *Tuner) usesGainFlag() bool {
+	return t.cfg.Gain != "" && !strings.EqualFold(t.cfg.Gain, "auto")
 }
 
 // deviceArg is what rtl_fm's -d receives: an index or a serial.
@@ -151,14 +171,16 @@ func (t *Tuner) tune(presetID string, hz int64) error {
 		return fmt.Errorf("%s", t.lastErr)
 	}
 
+	// Plain -M wbfm, with no rate flags of our own: it is the documented
+	// broadcast FM mode and outputs mono s16le at TunerOutputRate, which FFmpeg
+	// resamples onto the Dante clock. Overriding -s and -r here produced a
+	// stream at a rate the zone was not told about.
 	args := []string{
 		"-d", t.deviceArg(),
 		"-f", strconv.FormatInt(hz, 10),
 		"-M", "wbfm",
-		"-s", "200000",
-		"-r", "48000",
 	}
-	if t.cfg.Gain != "" {
+	if t.usesGainFlag() {
 		args = append(args, "-g", t.cfg.Gain)
 	}
 	if t.cfg.Squelch > 0 {

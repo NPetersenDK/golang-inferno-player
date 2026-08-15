@@ -103,8 +103,9 @@ zones:
 #       path: "/tmp/dante_player/radio.pcm"
 #       label: "Radio"
 #       realtime: true      # an SDR cannot be paused, so never block it
-#       channels: 1         # rtl_fm is mono; FFmpeg upmixes to stereo
-#       sample_rate: 48000
+#       format: s16le
+#       sample_rate: 32000  # rtl_fm -M wbfm emits exactly this
+#       channels: 1         # mono; FFmpeg upmixes to stereo
 #
 # One dongle tunes one frequency at a time. Retuning restarts the receiver, so
 # the zone goes quiet for a moment and comes back on its own.
@@ -122,7 +123,7 @@ zones:
 #   enabled: false
 #   zone_id: 3
 #   device: "0"           # or a serial, e.g. "dante-fm"
-#   gain: "auto"
+#   gain: "auto"          # or dB as a number, e.g. "28.0"
 #   squelch: 0            # nonzero gates the audio, for scanner use
 #   presets:
 #     # In hertz, not megahertz: 96.4 MHz is 96400000, eight digits. The UI's
