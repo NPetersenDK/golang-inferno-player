@@ -14,6 +14,17 @@ func newTestZone() *ZonePlayer {
 	return z
 }
 
+func newTestSourceZone(prebufferMs int) *ZonePlayer {
+	return NewZonePlayer(config.ZoneConfig{
+		ID:   4,
+		Name: "Spotify",
+		Source: &config.ZoneSource{
+			Type: "pipe", Path: "/tmp/spotify.pcm", Label: "Spotify",
+			PrebufferMs: prebufferMs,
+		},
+	}, make(chan struct{}, 100))
+}
+
 func pushChunks(z *ZonePlayer, n int) {
 	for i := 0; i < n; i++ {
 		z.audioChan <- make([]int32, 1920) // 960 stereo frames
@@ -156,6 +167,46 @@ func TestZoneWithoutSourceIsUnchanged(t *testing.T) {
 	}
 	if st := z.GetState(); st.IsSource || st.SourceLabel != "" {
 		t.Errorf("plain zone exposed source fields: %+v", st)
+	}
+}
+
+// A source zone is permanently attached to its producer, so a quiet producer
+// means idle. Reporting "buffering" there would claim it is working towards
+// playback when nothing is coming.
+func TestSourceZoneIsIdleWhenProducerIsQuiet(t *testing.T) {
+	z := newTestSourceZone(0)
+	pushChunks(z, z.prebufferChunks)
+	drainZone(t, z, z.prebufferChunks)
+
+	for i := 0; i < zoneStallChunks; i++ {
+		if _, ok := z.PullSamples(960); ok {
+			t.Fatalf("empty pull %d delivered audio", i)
+		}
+	}
+	if got := z.GetState().Status; got != StatusIdle {
+		t.Errorf("status %q with a quiet producer, want %q", got, StatusIdle)
+	}
+
+	// An idle source zone must keep pulling, or it could never come back.
+	pushChunks(z, z.prebufferChunks)
+	if _, ok := z.PullSamples(960); !ok {
+		t.Fatal("idle source zone did not resume when the producer returned")
+	}
+	if got := z.GetState().Status; got != StatusPlaying {
+		t.Errorf("status %q after the producer returned, want %q", got, StatusPlaying)
+	}
+}
+
+// Partial data means it really is buffering, for either kind of zone.
+func TestSourceZoneBuffersWhileFilling(t *testing.T) {
+	z := newTestSourceZone(0)
+	pushChunks(z, 1)
+
+	if _, ok := z.PullSamples(960); ok {
+		t.Fatal("delivered below the prebuffer")
+	}
+	if got := z.GetState().Status; got != StatusBuffering {
+		t.Errorf("status %q while filling, want %q", got, StatusBuffering)
 	}
 }
 

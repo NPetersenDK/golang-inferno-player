@@ -240,7 +240,8 @@ func (z *ZonePlayer) StartSource() error {
 	z.mu.Lock()
 	ctx, cancel := context.WithCancel(context.Background())
 	z.cancelFunc = cancel
-	z.status = StatusBuffering
+	// Idle until the producer actually sends something.
+	z.status = StatusIdle
 	z.stationID = "source"
 	z.stationName = src.Label
 	z.title = src.Label
@@ -474,14 +475,22 @@ func (z *ZonePlayer) PullSamples(numFrames int) ([]int32, bool) {
 	primed := z.primed
 	z.mu.RUnlock()
 
-	if status != StatusPlaying && status != StatusBuffering {
+	// A source zone is permanently attached to its producer, so it keeps pulling
+	// even while idle. A station zone only pulls once someone pressed play.
+	if !z.IsSource() && status != StatusPlaying && status != StatusBuffering {
 		z.setPeakL(0)
 		z.setPeakR(0)
 		return nil, false
 	}
 
 	if !primed {
-		if len(z.audioChan) < z.prebufferChunks {
+		if queued := len(z.audioChan); queued < z.prebufferChunks {
+			// Something is arriving, we are just short: that is buffering. An
+			// empty queue is handled by the stall path below, which for a
+			// source zone reports idle rather than buffering.
+			if queued > 0 {
+				z.setStatus(StatusBuffering)
+			}
 			z.decayPeaks()
 			return nil, false
 		}
@@ -548,16 +557,32 @@ func (z *ZonePlayer) setPrimed(primed bool) {
 	z.emptyPulls.Store(0)
 
 	z.mu.Lock()
-	if z.primed == primed {
+	changed := z.primed != primed
+	z.primed = primed
+	z.mu.Unlock()
+	if !changed {
+		return
+	}
+
+	switch {
+	case primed:
+		z.setStatus(StatusPlaying)
+	case z.IsSource():
+		// The producer went quiet. A source zone has nothing queued and nothing
+		// on the way, which is idle - it is not working towards playback.
+		z.setStatus(StatusIdle)
+	default:
+		z.setStatus(StatusBuffering)
+	}
+}
+
+func (z *ZonePlayer) setStatus(status PlaybackStatus) {
+	z.mu.Lock()
+	if z.status == status {
 		z.mu.Unlock()
 		return
 	}
-	z.primed = primed
-	if primed && z.status == StatusBuffering {
-		z.status = StatusPlaying
-	} else if !primed && z.status == StatusPlaying {
-		z.status = StatusBuffering
-	}
+	z.status = status
 	z.mu.Unlock()
 	z.notifyState()
 }
