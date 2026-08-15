@@ -23,6 +23,7 @@ type SystemStatus struct {
 	ClockStatus   string      `json:"clock_status"`
 	PTPStatus     string      `json:"ptp_status"`
 	PTP           PTPStats    `json:"ptp"`
+	Tuner         TunerState  `json:"tuner"`
 	ActiveStreams int         `json:"active_streams"`
 	Zones         []ZoneState `json:"zones"`
 }
@@ -37,6 +38,7 @@ type PlaybackManager struct {
 	mu         sync.RWMutex
 	ptp        *PTPMonitor
 	discipline *ClockDiscipline
+	tuner      *Tuner
 }
 
 func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
@@ -62,6 +64,14 @@ func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
 			log.Printf("[Zone %d] Source unavailable: %v", id, err)
 		}
 	}
+
+	// nil unless explicitly enabled, and every call on it is nil-safe.
+	mgr.tuner = NewTuner(cfg, func() {
+		select {
+		case stateChan <- struct{}{}:
+		default:
+		}
+	})
 
 	// Measure the Dante grandmaster passively, then serve the resulting media
 	// clock to Inferno on both socket paths it may look for.
@@ -359,10 +369,19 @@ func (m *PlaybackManager) GetStatus() SystemStatus {
 		ClockStatus:   clockStatus,
 		PTPStatus:     ptpStatus,
 		PTP:           stats,
+		Tuner:         m.tuner.State(),
 		ActiveStreams: active,
 		Zones:         zones,
 	}
 }
+
+// The tuner methods are nil-safe: with none configured they report that
+// instead of panicking, so callers need no feature check.
+func (m *PlaybackManager) TunePreset(id string) error { return m.tuner.TunePreset(id) }
+
+func (m *PlaybackManager) TuneFrequency(hz int64) error { return m.tuner.TuneFrequency(hz) }
+
+func (m *PlaybackManager) TunerOff() { m.tuner.Off() }
 
 func (m *PlaybackManager) clockStatus() (stats PTPStats, clock string, ptp string) {
 	if m.ptp == nil {

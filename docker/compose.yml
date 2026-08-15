@@ -25,6 +25,14 @@ services:
     ulimits:
       rtprio: 95
       memlock: -1
+    # Uncomment both to use an RTL-SDR as a source. See the README.
+    # Grant only the bus the dongle is on - find it with lsusb - rather than
+    # the whole USB tree. Note this is resolved at container start, so a
+    # replugged dongle needs a restart.
+    # environment:
+    #   - DANTE_TUNER_ENABLED=1
+    # devices:
+    #   - /dev/bus/usb/001:/dev/bus/usb/001
     volumes:
       # Default is relative to this file, not your shell. Set DANTE_CONFIG when
       # copying this file elsewhere - a wrong path makes Docker create a

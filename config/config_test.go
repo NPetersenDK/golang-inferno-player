@@ -109,6 +109,52 @@ zones:
 	}
 }
 
+// A realtime producer cannot be paused, so it must not inherit backpressure.
+func TestRealtimeSourceIsParsed(t *testing.T) {
+	cfg, err := LoadConfig(writeConfig(t, `
+zones:
+  - id: 3
+    source:
+      type: pipe
+      path: /tmp/radio.pcm
+      realtime: true
+      channels: 1
+      sample_rate: 48000
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := cfg.Zones[0].Source
+	if !src.Realtime {
+		t.Error("realtime was dropped")
+	}
+	if src.Channels != 1 {
+		t.Errorf("channels %d, want the configured 1 (mono upmixed by FFmpeg)", src.Channels)
+	}
+}
+
+// The tuner must not exist unless asked for, in config or environment.
+func TestTunerIsOffByDefault(t *testing.T) {
+	cfg, err := LoadConfig(writeConfig(t, "zones:\n  - id: 1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tuner != nil && cfg.Tuner.Enabled {
+		t.Error("tuner enabled without being configured")
+	}
+}
+
+func TestTunerEnvEnablesIt(t *testing.T) {
+	t.Setenv("DANTE_TUNER_ENABLED", "1")
+	cfg, err := LoadConfig(writeConfig(t, "zones:\n  - id: 1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tuner == nil || !cfg.Tuner.Enabled {
+		t.Error("DANTE_TUNER_ENABLED did not enable the tuner")
+	}
+}
+
 // A zone without a source block must come out exactly as before.
 func TestZoneWithoutSourceKeepsDefaults(t *testing.T) {
 	cfg, err := LoadConfig(writeConfig(t, `

@@ -88,6 +88,7 @@ function initSSE() {
     try {
       systemState = JSON.parse(event.data);
       updateHeader();
+      renderTuner();
       renderZones();
     } catch (err) {
       console.error("SSE parse error:", err);
@@ -168,6 +169,71 @@ function renderCategoryPills() {
   });
 
   categoryNav.innerHTML = html;
+}
+
+// The tuner is an opt-in feature: with it disabled the server reports
+// enabled:false and nothing is drawn at all.
+function renderTuner() {
+  const panel = document.getElementById("tunerPanel");
+  if (!panel) return;
+
+  const tuner = systemState.tuner;
+  if (!tuner || !tuner.enabled) {
+    panel.hidden = true;
+    return;
+  }
+
+  const signature = JSON.stringify(tuner);
+  if (panel.dataset.signature === signature) return;
+  panel.dataset.signature = signature;
+  panel.hidden = false;
+
+  const mhz = tuner.frequency_hz ? (tuner.frequency_hz / 1e6).toFixed(1) : null;
+  const status = tuner.error
+    ? `<span class="text-danger">${escapeHtml(tuner.error)}</span>`
+    : tuner.tuned
+      ? `Tuned to ${mhz} MHz`
+      : "Off";
+
+  const presets = (tuner.presets || []).map(p => `
+    <button class="btn btn-sm ${p.id === tuner.preset_id ? "btn-primary" : "btn-outline-secondary"} py-0 px-2 js-preset"
+            data-preset="${escapeHtml(p.id)}" style="font-size: 0.75rem;">
+      ${escapeHtml(p.name)}
+    </button>`).join("");
+
+  panel.innerHTML = `
+    <div class="card-body p-2 border-bottom">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="fw-semibold small"><i class="fa-solid fa-tower-broadcast me-1"></i> Radio</span>
+        <span class="text-muted" style="font-size: 0.7rem;">${status}</span>
+      </div>
+      <div class="d-flex flex-wrap gap-1 mb-2">${presets}</div>
+      <div class="d-flex gap-1">
+        <input type="number" class="form-control form-control-sm js-freq" step="0.1" min="87.5" max="108"
+               placeholder="MHz" value="${mhz || ""}" style="font-size: 0.75rem;">
+        <button class="btn btn-sm btn-outline-primary py-0 px-2 js-tune" style="font-size: 0.75rem;">Tune</button>
+        <button class="btn btn-sm btn-outline-danger py-0 px-2 js-off" style="font-size: 0.75rem;">Off</button>
+      </div>
+    </div>`;
+
+  panel.querySelectorAll(".js-preset").forEach(btn => {
+    btn.addEventListener("click", () => tune({ preset_id: btn.dataset.preset }));
+  });
+  panel.querySelector(".js-tune").addEventListener("click", () => {
+    const mhzValue = parseFloat(panel.querySelector(".js-freq").value);
+    if (!isNaN(mhzValue)) tune({ frequency_hz: Math.round(mhzValue * 1e6) });
+  });
+  panel.querySelector(".js-off").addEventListener("click", () => {
+    fetch("/api/tuner/off", { method: "POST" });
+  });
+}
+
+function tune(body) {
+  fetch("/api/tuner/tune", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
 }
 
 function renderZones() {

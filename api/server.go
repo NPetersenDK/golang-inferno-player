@@ -50,6 +50,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/presets/", s.handlePresetItem)
 	s.mux.HandleFunc("/api/zones/", s.handleZoneAction)
 	s.mux.HandleFunc("/api/stop-all", s.handleStopAll)
+	s.mux.HandleFunc("/api/tuner/", s.handleTuner)
 	s.mux.HandleFunc("/api/events", s.handleSSE)
 
 	// Web UI static files
@@ -221,6 +222,51 @@ func (s *Server) handleZoneAction(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Unknown action", http.StatusNotFound)
 	}
+}
+
+type TuneRequest struct {
+	PresetID    string `json:"preset_id,omitempty"`
+	FrequencyHz int64  `json:"frequency_hz,omitempty"`
+}
+
+// Tuner state rides along in /api/status, so this only handles commands.
+func (s *Server) handleTuner(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	action := strings.TrimPrefix(r.URL.Path, "/api/tuner/")
+	var err error
+	switch action {
+	case "tune":
+		var req TuneRequest
+		if derr := json.NewDecoder(r.Body).Decode(&req); derr != nil {
+			http.Error(w, derr.Error(), http.StatusBadRequest)
+			return
+		}
+		switch {
+		case req.PresetID != "":
+			err = s.mgr.TunePreset(req.PresetID)
+		case req.FrequencyHz > 0:
+			err = s.mgr.TuneFrequency(req.FrequencyHz)
+		default:
+			http.Error(w, "Either preset_id or frequency_hz required", http.StatusBadRequest)
+			return
+		}
+	case "off":
+		s.mgr.TunerOff()
+	default:
+		http.Error(w, "Unknown action", http.StatusNotFound)
+		return
+	}
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "action": action})
 }
 
 func (s *Server) handleStopAll(w http.ResponseWriter, r *http.Request) {

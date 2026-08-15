@@ -29,6 +29,12 @@ type ZoneSource struct {
 	SampleRate int    `json:"sample_rate,omitempty" yaml:"sample_rate,omitempty"`
 	Channels   int    `json:"channels,omitempty" yaml:"channels,omitempty"`
 
+	// Realtime marks a producer that cannot be paused. A radio or a capture
+	// device keeps sampling whether we read or not, so blocking it overruns its
+	// own buffer; a full queue must drop the oldest chunk instead, as for a
+	// network stream. Leave false for anything that can be held back.
+	Realtime bool `json:"realtime,omitempty" yaml:"realtime,omitempty"`
+
 	// PrebufferMs is how much audio must be queued before the zone starts
 	// delivering.
 	PrebufferMs int `json:"prebuffer_ms,omitempty" yaml:"prebuffer_ms,omitempty"`
@@ -60,12 +66,40 @@ type StationPreset struct {
 	IsCustom    bool   `json:"is_custom,omitempty" yaml:"is_custom,omitempty"`
 }
 
+// TunerPreset is one tunable station.
+type TunerPreset struct {
+	ID          string `json:"id" yaml:"id"`
+	Name        string `json:"name" yaml:"name"`
+	FrequencyHz int64  `json:"frequency_hz" yaml:"frequency_hz"`
+}
+
+// TunerConfig drives an SDR feeding one source zone. Disabled by default: with
+// Enabled false nothing starts, no API is served and the UI shows nothing, so
+// the feature does not exist for anyone who has not asked for it.
+type TunerConfig struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// ZoneID must name a zone whose source is a realtime pipe. The tuner writes
+	// to that source's path, so the two share one definition of where audio
+	// goes.
+	ZoneID int `json:"zone_id" yaml:"zone_id"`
+	// Device is passed to rtl_fm's -d. It takes an index or a serial number,
+	// matched exactly or by prefix or suffix. Prefer the serial: indices shift
+	// when USB devices come and go. Defaults to "0".
+	Device string `json:"device,omitempty" yaml:"device,omitempty"`
+	Gain   string `json:"gain,omitempty" yaml:"gain,omitempty"`
+	// Squelch gates the audio, in rtl_fm's own units. Zero leaves it open,
+	// which for broadcast FM is what you want.
+	Squelch int           `json:"squelch,omitempty" yaml:"squelch,omitempty"`
+	Presets []TunerPreset `json:"presets,omitempty" yaml:"presets,omitempty"`
+}
+
 type AppConfig struct {
 	HTTPPort   int             `json:"http_port" yaml:"http_port"`
 	PipeDir    string          `json:"pipe_dir" yaml:"pipe_dir"`
 	DanteName  string          `json:"dante_name" yaml:"dante_name"`
 	SampleRate int             `json:"sample_rate" yaml:"sample_rate"`
 	DataDir    string          `json:"data_dir,omitempty" yaml:"data_dir,omitempty"`
+	Tuner      *TunerConfig    `json:"tuner,omitempty" yaml:"tuner,omitempty"`
 	Zones      []ZoneConfig    `json:"zones" yaml:"zones"`
 	Stations   []StationPreset `json:"stations" yaml:"stations"`
 	Presets    []StationPreset `json:"presets,omitempty" yaml:"presets,omitempty"` // backward compat
@@ -209,6 +243,14 @@ func (c *AppConfig) applyEnvOverrides() {
 	}
 	if pipe := os.Getenv("PIPE_DIR"); pipe != "" {
 		c.PipeDir = pipe
+	}
+
+	if v := os.Getenv("DANTE_TUNER_ENABLED"); v != "" {
+		on := v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+		if c.Tuner == nil {
+			c.Tuner = &TunerConfig{}
+		}
+		c.Tuner.Enabled = on
 	}
 
 	// Latency knobs for source zones, so they can be tuned from the compose

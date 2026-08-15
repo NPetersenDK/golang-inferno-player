@@ -182,6 +182,32 @@ That image has its own lifecycle and is rebuilt monthly to track raspotify relea
 
 Raspberry Pi OS already runs `avahi-daemon` — it is what serves your `.local` hostname — so this costs no installation, and it avoids two daemons competing for UDP 5353 on the host network. Confirm with `systemctl status avahi-daemon`, and `sudo apt install avahi-daemon` if it is genuinely absent.
 
+### Optional: RTL-SDR tuner
+
+An RTL-SDR can feed a source zone with broadcast FM, tuned from the web UI. It is off unless you ask for it: with `DANTE_TUNER_ENABLED` unset nothing starts, no API is served and the UI shows nothing.
+
+```yaml
+    environment:
+      - DANTE_TUNER_ENABLED=1
+    devices:
+      - /dev/bus/usb/001:/dev/bus/usb/001
+```
+
+Grant only the bus the dongle sits on rather than the whole USB tree. `lsusb` shows which one, and `lsusb -s 001:` confirms nothing else shares it. There is no `/dev/serial/by-id` equivalent to be more precise than this: an RTL-SDR is a raw libusb device, so the kernel creates no persistent node for it, and the per-device path `/dev/bus/usb/001/012` renumbers on every replug. Docker resolves `devices:` at container start, so keep the dongle in the same port and restart the container after replugging it.
+
+Find the dongle with `docker exec dante-streamer rtl_test -t`, which prints each device with its serial:
+
+```
+Found 1 device(s):
+  0:  Realtek, RTL2838UHIDIR, SN: 00000001
+```
+
+The `device` setting takes either that index or the serial, matched exactly or by prefix or suffix. Prefer the serial — indices shift as USB devices come and go. Most dongles ship with the same factory serial, so give yours its own with `rtl_eeprom -d 0 -s dante-fm` if you run more than one. `rtl_fm` prints the same device list on every start, so it also shows up in the container log under `[Tuner]`.
+
+Then give a zone a realtime pipe source and add a `tuner` block naming it — see `config.example.yaml`. `realtime: true` matters: an SDR keeps sampling whether you read it or not, so blocking it overruns its buffer. That flag makes the zone drop the oldest chunk instead, exactly as it does for a live network stream.
+
+One dongle tunes one frequency at a time, so FM and DAB+ cannot run in parallel from a single stick. Retuning restarts the receiver, which costs the zone its prebuffer: it reports idle for a moment and comes back on its own. With squelch enabled for scanner use, the zone shows **Waiting** between transmissions and **Playing** when there is traffic.
+
 ### Tuning latency
 
 A pipe producer is held back by backpressure rather than paced by a network, so it keeps its queue full — the queue cap, not the prebuffer, is what you hear. These override the config for every source zone, so they can be tuned from the compose file without editing a mounted `config.yaml`:

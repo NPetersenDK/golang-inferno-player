@@ -267,9 +267,10 @@ func (z *ZonePlayer) StartSource() error {
 // sourceLoop keeps a decoder attached to the FIFO, with FFmpeg resampling the
 // producer's rate onto the Dante clock.
 //
-// It reads with backpressure, which is what paces the producer: a full queue
-// blocks the reader, FFmpeg's pipe fills, and the producer's write blocks.
-// Drain the FIFO as fast as it is written and the producer has no clock at all.
+// A pausable producer is read with backpressure, which is what paces it: a full
+// queue blocks the reader, FFmpeg's pipe fills, and the producer's write blocks.
+// Drain the FIFO as fast as it is written and it has no clock at all. A
+// realtime producer is the opposite and must never be blocked.
 func (z *ZonePlayer) sourceLoop(ctx context.Context, src config.ZoneSource) {
 	args := []string{
 		"-hide_banner",
@@ -293,7 +294,7 @@ func (z *ZonePlayer) sourceLoop(ctx context.Context, src config.ZoneSource) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := z.decodeInto(ctx, args, true); err != nil && ctx.Err() == nil {
+		if err := z.decodeInto(ctx, args, !src.Realtime); err != nil && ctx.Err() == nil {
 			log.Printf("[Zone %d] Source decoder stopped: %v, restarting", z.cfg.ID, err)
 		}
 		select {

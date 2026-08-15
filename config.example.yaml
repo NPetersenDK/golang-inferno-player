@@ -88,6 +88,51 @@ zones:
   # ----------------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------
+# Optional: RTL-SDR tuner feeding one source zone.
+#
+# Disabled by default - with enabled false nothing starts, no API is served and
+# the UI shows nothing. zone_id must name a zone whose source is a realtime pipe
+# at the path the tuner writes to:
+#
+#   - id: 3
+#     name: "Radio"
+#     dante_left: "Radio L (Ch 5)"
+#     dante_right: "Radio R (Ch 6)"
+#     source:
+#       type: pipe
+#       path: "/tmp/dante_player/radio.pcm"
+#       label: "Radio"
+#       realtime: true      # an SDR cannot be paused, so never block it
+#       channels: 1         # rtl_fm is mono; FFmpeg upmixes to stereo
+#       sample_rate: 48000
+#
+# One dongle tunes one frequency at a time. Retuning restarts the receiver, so
+# the zone goes quiet for a moment and comes back on its own.
+# ------------------------------------------------------------------------------
+# Find the device with:  docker exec dante-streamer rtl_test -t
+# It prints e.g.  0:  Realtek, RTL2838UHIDIR, SN: 00000001
+# rtl_fm prints the same list every time it starts, so it also appears in the
+# container log under [Tuner].
+#
+# "device" takes an index or a serial, matched exactly or by prefix or suffix.
+# Prefer the serial: indices shift when USB devices come and go. Give a dongle
+# its own serial with:  rtl_eeprom -d 0 -s dante-fm
+# ------------------------------------------------------------------------------
+# tuner:
+#   enabled: false
+#   zone_id: 3
+#   device: "0"           # or a serial, e.g. "dante-fm"
+#   gain: "auto"
+#   squelch: 0            # nonzero gates the audio, for scanner use
+#   presets:
+#     - id: "p3"
+#       name: "DR P3"
+#       frequency_hz: 96500000
+#     - id: "p4"
+#       name: "DR P4"
+#       frequency_hz: 92900000
+
+# ------------------------------------------------------------------------------
 # Radio Stations & Audio Streams
 # ------------------------------------------------------------------------------
 stations:

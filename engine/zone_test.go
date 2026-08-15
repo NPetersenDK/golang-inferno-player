@@ -282,6 +282,45 @@ func TestEnqueueDropsOldestWithoutBackpressure(t *testing.T) {
 	}
 }
 
+// Every tuner method has to be safe on a nil receiver, since that is what an
+// unconfigured tuner is.
+func TestNilTunerIsInert(t *testing.T) {
+	var tuner *Tuner
+
+	if st := tuner.State(); st.Enabled || st.Presets == nil {
+		t.Errorf("nil tuner reported %+v, want disabled with an empty preset list", st)
+	}
+	if err := tuner.TunePreset("p3"); err == nil {
+		t.Error("TunePreset on a nil tuner should report that it is not enabled")
+	}
+	if err := tuner.TuneFrequency(96_500_000); err == nil {
+		t.Error("TuneFrequency on a nil tuner should report that it is not enabled")
+	}
+	tuner.Off() // must not panic
+}
+
+// rtl_fm's -d takes an index or a serial, so the setting is a string and an
+// empty one must still select the first device rather than passing "".
+func TestTunerDeviceArg(t *testing.T) {
+	if got := (&Tuner{}).deviceArg(); got != "0" {
+		t.Errorf("unset device gave %q, want %q", got, "0")
+	}
+	tuner := &Tuner{cfg: config.TunerConfig{Device: "dante-fm"}}
+	if got := tuner.deviceArg(); got != "dante-fm" {
+		t.Errorf("device %q, want the configured serial", got)
+	}
+}
+
+func TestTuneFrequencyRejectsOutOfRange(t *testing.T) {
+	tuner := &Tuner{}
+	if err := tuner.TuneFrequency(1_000); err == nil {
+		t.Error("accepted a frequency below the tuner's range")
+	}
+	if err := tuner.TuneFrequency(3_000_000_000); err == nil {
+		t.Error("accepted a frequency above the tuner's range")
+	}
+}
+
 func TestIdleZoneDeliversNothing(t *testing.T) {
 	z := newTestZone()
 	z.status = StatusIdle

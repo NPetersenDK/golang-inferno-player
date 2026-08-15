@@ -86,6 +86,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
     procps \
     curl \
+    rtl-sdr \
     && rm -rf /var/lib/apt/lists/*
 
 # The alsa-lib plugin directory is multiarch-specific, so ask dpkg where it is.
