@@ -338,6 +338,33 @@ func TestAutoGainOmitsTheFlag(t *testing.T) {
 	}
 }
 
+// Which rate rtl_fm settles on varies by build, so the mismatch has to be
+// caught from its own output rather than assumed.
+func TestOutputRateMismatchIsDetected(t *testing.T) {
+	var lines []string
+	tuner := &Tuner{zoneID: 3, zoneRate: 32000}
+	writer := logWriter{prefix: "[Tuner]", inspect: func(line string) {
+		lines = append(lines, line)
+		tuner.checkOutputRate(line)
+	}}
+
+	if _, err := writer.Write([]byte("Output at 170000 Hz.\nAllocating 15 zero-copy buffers\n")); err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 {
+		t.Errorf("forwarded %d lines, want 2", len(lines))
+	}
+
+	// Matching rates must stay quiet; only the parse is asserted here, since
+	// the warning itself goes to the log.
+	if m := rtlOutputRate.FindStringSubmatch("Output at 170000 Hz."); m == nil || m[1] != "170000" {
+		t.Errorf("failed to read the rate out of rtl_fm's line: %v", m)
+	}
+	if rtlOutputRate.MatchString("Sampling at 1020000 S/s.") {
+		t.Error("matched the capture rate line, which is a different number")
+	}
+}
+
 // Writing megahertz into a hertz field is the easy mistake, and a preset must
 // be checked as strictly as a typed-in frequency.
 func TestPresetFrequencyIsValidated(t *testing.T) {

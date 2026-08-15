@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,10 +13,10 @@ import (
 	"dante-player/config"
 )
 
-// TunerOutputRate is what rtl_fm -M wbfm emits: mono signed 16-bit at 32 kHz.
-// A zone fed by the tuner must declare exactly this, or FFmpeg reads the stream
-// at the wrong rate and you hear noise.
-const TunerOutputRate = 32000
+// rtl_fm announces its output rate on stderr, and which rate -M wbfm settles on
+// varies between builds. Rather than hardcode a guess, we read that line and
+// compare it against what the zone was told to expect.
+var rtlOutputRate = regexp.MustCompile(`Output at (\d+) Hz`)
 
 // TunerState is what the UI and API see.
 type TunerState struct {
@@ -36,6 +37,8 @@ type TunerState struct {
 type Tuner struct {
 	cfg      config.TunerConfig
 	fifoPath string
+	zoneID   int
+	zoneRate int
 
 	mu      sync.Mutex
 	cmd     *exec.Cmd
@@ -68,14 +71,18 @@ func NewTuner(cfg *config.AppConfig, notify func()) *Tuner {
 	if !zone.Source.Realtime {
 		log.Printf("[Tuner] zone %d source is not marked realtime; an SDR cannot be paused and will overrun", zone.ID)
 	}
-	// A rate or channel mismatch is inaudible as anything but noise, so say it
-	// plainly rather than leaving it to be diagnosed by ear.
-	if zone.Source.SampleRate != TunerOutputRate || zone.Source.Channels != 1 || zone.Source.Format != "s16le" {
-		log.Printf("[Tuner] zone %d source is %s %d Hz %d ch, but rtl_fm emits s16le %d Hz mono - expect noise until they match",
-			zone.ID, zone.Source.Format, zone.Source.SampleRate, zone.Source.Channels, TunerOutputRate)
+	if zone.Source.Channels != 1 || zone.Source.Format != "s16le" {
+		log.Printf("[Tuner] zone %d source is %s %d ch, but rtl_fm emits s16le mono",
+			zone.ID, zone.Source.Format, zone.Source.Channels)
 	}
 
-	t := &Tuner{cfg: *cfg.Tuner, fifoPath: zone.Source.Path, notify: notify}
+	t := &Tuner{
+		cfg:      *cfg.Tuner,
+		fifoPath: zone.Source.Path,
+		zoneID:   zone.ID,
+		zoneRate: zone.Source.SampleRate,
+		notify:   notify,
+	}
 	// rtl_fm lists every attached device with its serial on stderr each time it
 	// starts, and that lands in this log, so tuning once is enough to find the
 	// value for "device".
@@ -190,7 +197,7 @@ func (t *Tuner) tune(presetID string, hz int64) error {
 
 	cmd := exec.Command("rtl_fm", args...)
 	cmd.Stdout = sink
-	cmd.Stderr = logWriter{prefix: "[Tuner]"}
+	cmd.Stderr = logWriter{prefix: "[Tuner]", inspect: t.checkOutputRate}
 	if err := cmd.Start(); err != nil {
 		_ = sink.Close()
 		t.lastErr = fmt.Sprintf("start rtl_fm: %v", err)
@@ -245,13 +252,38 @@ func (t *Tuner) changed() {
 	}
 }
 
-// logWriter forwards a child process's stderr into our log, a line at a time.
-type logWriter struct{ prefix string }
+// checkOutputRate compares the rate rtl_fm reports against what the zone was
+// configured for. Getting this wrong is not subtle in the log and completely
+// inaudible in the audio, where it just sounds like a bad signal.
+func (t *Tuner) checkOutputRate(line string) {
+	m := rtlOutputRate.FindStringSubmatch(line)
+	if m == nil {
+		return
+	}
+	rate, err := strconv.Atoi(m[1])
+	if err != nil || rate == t.zoneRate {
+		return
+	}
+	log.Printf("[Tuner] RATE MISMATCH: rtl_fm outputs %d Hz but zone %d declares %d Hz. "+
+		"Set sample_rate: %d on that source, or it will only ever sound like noise.",
+		rate, t.zoneID, t.zoneRate, rate)
+}
+
+// logWriter forwards a child process's stderr into our log, a line at a time,
+// optionally handing each line to a hook.
+type logWriter struct {
+	prefix  string
+	inspect func(line string)
+}
 
 func (w logWriter) Write(p []byte) (int, error) {
 	for _, line := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
-		if line != "" {
-			log.Printf("%s %s", w.prefix, line)
+		if line == "" {
+			continue
+		}
+		log.Printf("%s %s", w.prefix, line)
+		if w.inspect != nil {
+			w.inspect(line)
 		}
 	}
 	return len(p), nil

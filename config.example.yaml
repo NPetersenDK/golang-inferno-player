@@ -104,7 +104,10 @@ zones:
 #       label: "Radio"
 #       realtime: true      # an SDR cannot be paused, so never block it
 #       format: s16le
-#       sample_rate: 32000  # rtl_fm -M wbfm emits exactly this
+#       # Must match rtl_fm's own "Output at N Hz." line, which differs between
+#       # builds. Get it wrong and it only ever sounds like a bad signal, so the
+#       # tuner compares the two and shouts RATE MISMATCH in the log.
+#       sample_rate: 170000
 #       channels: 1         # mono; FFmpeg upmixes to stereo
 #
 # One dongle tunes one frequency at a time. Retuning restarts the receiver, so
