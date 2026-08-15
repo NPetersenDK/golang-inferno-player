@@ -347,15 +347,37 @@ func (m *PlaybackManager) clockStatus() (stats PTPStats, clock string, ptp strin
 		return PTPStats{LastSyncAgo: "never"}, "Media clock: static offset", "PTP monitor not started"
 	}
 	stats = m.ptp.Stats()
+	if m.discipline != nil {
+		if errNs, ok := m.discipline.SyncError(); ok {
+			stats.SyncErrorNs = errNs
+		}
+	}
+
 	if !stats.Locked {
 		return stats,
-			fmt.Sprintf("Free-running on static offset (%d Sync packets seen)", stats.SyncPackets),
-			"No PTPv1 grandmaster locked"
+			fmt.Sprintf("No PTP lock (%d Sync packets seen)", stats.SyncPackets),
+			fmt.Sprintf("Running on the static offset. Seen %d Sync packets, last %s ago.",
+				stats.SyncPackets, stats.LastSyncAgo)
 	}
-	clock = fmt.Sprintf("PTP Locked (%d Hz)", m.cfg.SampleRate)
-	ptp = fmt.Sprintf("Slave to %s: offset %.3f ms, drift %.2f ppm",
-		stats.MasterID, float64(stats.OffsetNs)/1e6, stats.DriftPPM)
+
+	// The absolute offset is the grandmaster's epoch, which is a free-running
+	// counter and means nothing to a reader. What matters is how tightly we
+	// track it and how far the two oscillators are apart.
+	clock = fmt.Sprintf("PTP locked · %s · %+.1f ppm", formatSyncError(stats.SyncErrorNs), stats.DriftPPM)
+	ptp = fmt.Sprintf("Grandmaster %s · %d Hz · last Sync %s ago · %d samples in the fit",
+		stats.MasterID, m.cfg.SampleRate, stats.LastSyncAgo, stats.Samples)
 	return stats, clock, ptp
+}
+
+func formatSyncError(ns int64) string {
+	abs := absInt64(ns)
+	if abs < 1_000 {
+		return fmt.Sprintf("%d ns", abs)
+	}
+	if abs < 1_000_000 {
+		return fmt.Sprintf("%.1f µs", float64(abs)/1e3)
+	}
+	return fmt.Sprintf("%.2f ms", float64(abs)/1e6)
 }
 
 func (m *PlaybackManager) SubscribeState() chan SystemStatus {

@@ -38,17 +38,13 @@ func TestZoneWaitsForPrebuffer(t *testing.T) {
 	}
 }
 
-// Handing out the one chunk that arrives after a dropout would just glitch
-// again on the next pull, so the zone has to rebuild its whole prebuffer.
-func TestZoneRebuildsPrebufferAfterStarving(t *testing.T) {
+// Re-priming on every dip is what made the zone flap between playing and
+// buffering: the queue level drifts freely, so brief shortfalls are normal and
+// must cost one 20 ms hole rather than a second of silence.
+func TestZoneRidesOutBriefShortfall(t *testing.T) {
 	z := newTestZone()
 	pushChunks(z, zonePrebufferChunks)
-
-	for i := 0; i < zonePrebufferChunks; i++ {
-		if _, ok := z.PullSamples(960); !ok {
-			t.Fatalf("delivery %d failed with a full prebuffer", i)
-		}
-	}
+	drainZone(t, z, zonePrebufferChunks)
 
 	if _, ok := z.PullSamples(960); ok {
 		t.Fatal("zone delivered from an empty queue")
@@ -56,13 +52,45 @@ func TestZoneRebuildsPrebufferAfterStarving(t *testing.T) {
 	if got := z.StarvationCount(); got != 1 {
 		t.Errorf("starvation count %d, want 1", got)
 	}
-	if got := z.GetState().Status; got != StatusBuffering {
-		t.Errorf("status %q after starving, want %q", got, StatusBuffering)
+	if got := z.GetState().Status; got != StatusPlaying {
+		t.Errorf("status %q after one empty pull, want %q", got, StatusPlaying)
 	}
 
+	// One chunk arriving is enough to carry on, because we never left playing.
+	pushChunks(z, 1)
+	if _, ok := z.PullSamples(960); !ok {
+		t.Fatal("zone did not resume after the queue refilled")
+	}
+}
+
+func TestZoneDeclaresStallAfterSustainedGap(t *testing.T) {
+	z := newTestZone()
+	pushChunks(z, zonePrebufferChunks)
+	drainZone(t, z, zonePrebufferChunks)
+
+	for i := 0; i < zoneStallChunks; i++ {
+		if _, ok := z.PullSamples(960); ok {
+			t.Fatalf("empty pull %d delivered audio", i)
+		}
+	}
+
+	if got := z.GetState().Status; got != StatusBuffering {
+		t.Errorf("status %q after a sustained gap, want %q", got, StatusBuffering)
+	}
+
+	// Back to buffering means the full prebuffer has to be rebuilt.
 	pushChunks(z, 1)
 	if _, ok := z.PullSamples(960); ok {
-		t.Fatal("zone resumed on a single chunk instead of rebuilding the prebuffer")
+		t.Fatal("stalled zone resumed on a single chunk")
+	}
+}
+
+func drainZone(t *testing.T, z *ZonePlayer, chunks int) {
+	t.Helper()
+	for i := 0; i < chunks; i++ {
+		if _, ok := z.PullSamples(960); !ok {
+			t.Fatalf("delivery %d failed with a full prebuffer", i)
+		}
 	}
 }
 

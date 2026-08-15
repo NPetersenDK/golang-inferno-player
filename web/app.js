@@ -113,7 +113,11 @@ function fetchStations() {
 
 function updateHeader() {
   if (danteDeviceText) danteDeviceText.textContent = systemState.dante_device || "Dante-Pi";
-  if (clockStatusText) clockStatusText.textContent = systemState.clock_status || "PTP Locked (48kHz)";
+  if (clockStatusText) {
+    clockStatusText.textContent = systemState.clock_status || "Clock status unknown";
+    // The detail line is long, so it lives in the tooltip rather than the bar.
+    clockStatusText.title = systemState.ptp_status || "";
+  }
 
   if (systemState.zones) {
     const activeCount = systemState.zones.filter(z => z.status === "playing").length;
@@ -161,6 +165,12 @@ function renderZones() {
   if (!systemState.zones || systemState.zones.length === 0) return;
 
   syncZoneDropdowns();
+
+  // The static "Connecting to Dante engine" placeholder lives inside the list.
+  // The old full-rebuild wiped it implicitly; updating in place has to drop it
+  // explicitly the first time real zones arrive.
+  const placeholder = document.getElementById("zonesPlaceholder");
+  if (placeholder) placeholder.remove();
 
   systemState.zones.forEach((zone, index) => {
     let refs = zoneNodes.get(zone.id);

@@ -83,6 +83,7 @@ type PTPStats struct {
 	Locked      bool    `json:"locked"`
 	MasterID    string  `json:"master_id"`
 	OffsetNs    int64   `json:"offset_ns"`
+	SyncErrorNs int64   `json:"sync_error_ns"`
 	DriftPPM    float64 `json:"drift_ppm"`
 	Samples     int     `json:"samples"`
 	SyncPackets uint64  `json:"sync_packets"`
@@ -476,12 +477,13 @@ func resolveDanteInterface() *net.Interface {
 type ClockDiscipline struct {
 	ptp *PTPMonitor
 
-	mu        sync.RWMutex
-	shiftNs   int64
-	freqScale float64
-	acquired  bool
-	lastTick  time.Time
-	lastLog   time.Time
+	mu          sync.RWMutex
+	shiftNs     int64
+	freqScale   float64
+	lastErrorNs int64
+	acquired    bool
+	lastTick    time.Time
+	lastLog     time.Time
 
 	staticNs   int64
 	stepNs     int64
@@ -530,6 +532,17 @@ func (d *ClockDiscipline) Overlay() (shiftNs int64, freqScale float64) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.shiftNs, d.freqScale
+}
+
+// SyncError is how far the media clock we serve currently sits from the
+// measured grandmaster. This is the figure that decides whether a Dante
+// receiver accepts a packet, so it is the meaningful "how good is the sync"
+// number - it is not the network path delay, which a listen-only implementation
+// never measures.
+func (d *ClockDiscipline) SyncError() (ns int64, ok bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.lastErrorNs, d.acquired
 }
 
 func (d *ClockDiscipline) Locked() bool {
@@ -598,6 +611,7 @@ func (d *ClockDiscipline) applyEstimate(target int64, freq float64, now time.Tim
 	d.freqScale = freq
 
 	err := target - d.shiftNs
+	d.lastErrorNs = err
 	if !d.acquired || absInt64(err) > d.stepNs {
 		if d.acquired {
 			log.Printf("[Clock] stepping media clock by %.3f ms (offset error exceeded %.3f ms)",
@@ -625,7 +639,8 @@ func (d *ClockDiscipline) applyEstimate(target int64, freq float64, now time.Tim
 
 	if now.Sub(d.lastLog) > 60*time.Second {
 		d.lastLog = now
-		log.Printf("[Clock] tracking grandmaster: shift %.3f ms, drift %.2f ppm", float64(d.shiftNs)/1e6, freq*1e6)
+		log.Printf("[Clock] tracking grandmaster: sync error %.1f us, drift %.2f ppm, shift %.3f ms",
+			float64(d.lastErrorNs)/1e3, freq*1e6, float64(d.shiftNs)/1e6)
 	}
 }
 

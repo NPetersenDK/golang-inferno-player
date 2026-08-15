@@ -24,14 +24,29 @@ const (
 	StatusError     PlaybackStatus = "error"
 )
 
+// Buffering geometry, in 20 ms chunks.
+//
+// FFmpeg produces at whatever rate the source server hands the stream over,
+// while the mixer consumes at the Dante media clock rate. Those are two
+// unrelated oscillators, so the queue level is a random walk with no restoring
+// force: whatever it is primed to, it drifts from there. The only defence is to
+// make the walk's headroom much larger than the jitter of an internet stream,
+// which is why web radio players buffer seconds rather than milliseconds.
 const (
-	// zonePrebufferChunks is how much decoded audio a zone queues before it
-	// starts delivering. FFmpeg produces at whatever rate the network hands it
-	// over, while the mixer consumes at the Dante media clock rate, so without
-	// slack the queue sits at zero and any jitter on the source turns into 20 ms
-	// of substituted silence - audible as a click even though the Dante packet
-	// itself leaves on time.
-	zonePrebufferChunks = 8 // ~160 ms at 20 ms per chunk
+	// zoneQueueChunks caps the queue, and so caps added latency. The producer
+	// drops the oldest chunk once it is reached, which is what handles a source
+	// that runs faster than the Dante clock.
+	zoneQueueChunks = 150 // 3 s
+
+	// zonePrebufferChunks is the level a zone fills to before it starts
+	// delivering, leaving roughly a second of slack in both directions.
+	zonePrebufferChunks = 50 // 1 s
+
+	// zoneStallChunks is how long the queue must stay empty before the zone is
+	// treated as stalled rather than momentarily short. Rebuilding the whole
+	// prebuffer costs a second of silence, so it must not be triggered by the
+	// odd missing chunk.
+	zoneStallChunks = 50 // 1 s
 )
 
 type ZoneState struct {
@@ -67,8 +82,9 @@ type ZonePlayer struct {
 	peakR atomic.Uint64 // float64 bits
 
 	// primed is false until the queue has built up zonePrebufferChunks, and
-	// goes false again whenever it runs dry.
+	// goes false again only after the queue has stayed empty for zoneStallChunks.
 	primed      bool
+	emptyPulls  atomic.Int64
 	starvations atomic.Uint64
 
 	cancelFunc context.CancelFunc
@@ -83,7 +99,7 @@ func NewZonePlayer(cfg config.ZoneConfig, stateChan chan struct{}) *ZonePlayer {
 		volume:    85,
 		muted:     false,
 		stateChan: stateChan,
-		audioChan: make(chan []int32, 20),
+		audioChan: make(chan []int32, zoneQueueChunks),
 	}
 	z.setPeakL(0)
 	z.setPeakR(0)
@@ -239,6 +255,7 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 	z.status = StatusBuffering
 	z.primed = false
 	z.mu.Unlock()
+	z.emptyPulls.Store(0)
 	z.notifyState()
 
 	// Chunk size: 960 frames (20ms at 48kHz) * 2 channels * 4 bytes = 7680 bytes
@@ -323,9 +340,17 @@ func (z *ZonePlayer) PullSamples(numFrames int) ([]int32, bool) {
 	var samples []int32
 	select {
 	case samples = <-z.audioChan:
+		z.emptyPulls.Store(0)
 	default:
+		// A momentary shortfall costs one 20 ms hole. Dropping back to
+		// buffering here would instead cost a full prebuffer of silence, and
+		// since the queue level drifts freely it would happen over and over -
+		// that is what made the zone flap between playing and buffering. Only a
+		// sustained gap means the source has actually stalled.
 		z.starvations.Add(1)
-		z.setPrimed(false)
+		if z.emptyPulls.Add(1) >= zoneStallChunks {
+			z.setPrimed(false)
+		}
 		z.decayPeaks()
 		return nil, false
 	}
@@ -369,6 +394,8 @@ func (z *ZonePlayer) StarvationCount() uint64 {
 }
 
 func (z *ZonePlayer) setPrimed(primed bool) {
+	z.emptyPulls.Store(0)
+
 	z.mu.Lock()
 	if z.primed == primed {
 		z.mu.Unlock()
