@@ -13,7 +13,10 @@ services:
       - INFERNO_SAMPLE_RATE=48000
       - HTTP_PORT=8085
     cap_add:
-      - SYS_TIME
+      # NET_ADMIN: entrypoint sets allmulticast and rp_filter on the Dante NIC.
+      # SYS_NICE: real-time priority for the Inferno transmit thread.
+      # SYS_TIME is deliberately absent - the PTP listener never touches the
+      # system clock, it serves an overlay on top of it instead.
       - NET_ADMIN
       - NET_RAW
       - SYS_NICE

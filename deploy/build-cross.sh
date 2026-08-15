@@ -28,9 +28,7 @@ else
 fi
 
 echo "=== Copying Service Configurations ==="
-cp "$SCRIPT_DIR/statime.service" "$OUTPUT_DIR/"
 cp "$SCRIPT_DIR/inferno-dante.service" "$OUTPUT_DIR/"
 cp "$SCRIPT_DIR/dante-player.service" "$OUTPUT_DIR/"
-cp "$SCRIPT_DIR/inferno-ptpv1.toml" "$OUTPUT_DIR/"
 
 echo "=== Output package ready in $OUTPUT_DIR ==="

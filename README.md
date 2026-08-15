@@ -1,6 +1,6 @@
 # Dante Streamer (via Inferno)
 
-A web interface and audio streamer for Raspberry Pi and Linux that streams web radio, HLS, AAC, and MP3 audio directly into a Dante Audio over IP (AoIP) network using Inferno and Statime.
+A web interface and audio streamer for Raspberry Pi and Linux that streams web radio, HLS, AAC, and MP3 audio directly into a Dante Audio over IP (AoIP) network using Inferno.
 
 ## Overview
 
@@ -113,7 +113,7 @@ Set DANTE_INTERFACE in docker-compose.yml to the network interface connected to 
 - DANTE_INTERFACE=eth1
 
 The entrypoint script automatically:
-1. Configures the Statime PTP daemon to synchronize clocks on that interface.
+1. Points the PTPv1 listener at that interface, so the media clock is measured from the Dante grandmaster reachable there.
 2. Sets INFERNO_BIND_IP to that interface, routing all Dante audio multicast and mDNS traffic through it.
 3. Leaves the web management UI reachable across all interfaces on port 8085.
 
@@ -147,15 +147,14 @@ Dante Audio over IP requires high-precision PTPv1 clock synchronization (IEEE 15
 To ensure rock-solid stability and zero startup latency, this project includes a native implementation of the **[usrvclock](https://gitlab.com/lumifaza/usrvclock)** protocol directly inside the Go stream engine ([`engine/usrvclock.go`](file:///e:/Git/tmpshit/dante/golang-inferno-player/engine/usrvclock.go)):
 
 - **Instant ALSA Startup:** Standard Inferno setups can hit 5-second ALSA startup timeouts waiting for external clock daemon sockets. The embedded Go `usrvclock` driver responds immediately (<0.1ms), preventing driver timeouts and audio stream resets.
-- **Continuous Phase Locking:** While Statime synchronizes the Linux system clock with the network's Dante Grandmaster, the embedded driver serves smooth, continuous clock overlays to the Inferno ALSA module, ensuring uninterrupted, dropout-free audio streaming.
+- **No PTP Daemon:** A passive PTPv1 listener ([`engine/ptpv1.go`](file:///e:/Git/tmpshit/dante/golang-inferno-player/engine/ptpv1.go)) measures the grandmaster's phase and rate straight off the wire and feeds them into the overlay. It never transmits, never runs the BMCA and never touches the system clock, so no external daemon and no `SYS_TIME` capability are required.
+- **Continuous Phase Locking:** The measured offset is slewed rather than stepped once locked, so the media clock stays continuous under a running Dante flow. The status bar reports the live sync error and oscillator drift.
 
 ## Upstream Projects and Dependencies
 
 This project relies on the following open source software:
 
 - Inferno (Dante Audio over IP implementation for Linux): https://github.com/teodly/inferno
-- Statime (PTPv1 fork for Dante clock synchronization): https://github.com/teodly/statime
-- Statime (Upstream Project Pendulum): https://github.com/pendulum-project/statime
 - FFmpeg (Audio stream decoding and format conversion): https://ffmpeg.org
 - usrvclock (Userspace Virtual Clock Protocol): https://gitlab.com/lumifaza/usrvclock
 

@@ -293,7 +293,7 @@ function updateZoneNode(refs, zone) {
 
   setText(refs.name, zone.name || "");
   setText(refs.channels, `${zone.dante_left || ""} / ${zone.dante_right || ""}`);
-  setText(refs.station, zone.station_name || "Digital silence (ready for playback)");
+  setText(refs.station, zone.station_name || "No stream");
 
   if (zone.status !== refs.lastStatus) {
     refs.lastStatus = zone.status;

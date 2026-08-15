@@ -1,7 +1,6 @@
 [Unit]
 Description=Inferno Dante Multi-Channel Transmitter Daemon
-After=network.target statime.service
-Wants=statime.service
+After=network.target
 
 [Service]
 Type=simple

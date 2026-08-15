@@ -99,7 +99,7 @@ jobs:
           # Registry cache rather than type=gha. GitHub's Actions cache is scoped
           # per ref, and this workflow only runs on tags, so a cache written
           # while building v1.0.0 is invisible when building v1.0.1 - every
-          # release recompiled Statime and Inferno from scratch. A registry
+          # release recompiled the Inferno ALSA module from scratch. A registry
           # cache is shared by all runs. It is only an optimisation: if the
           # cache tag is missing or stale the build still succeeds, just slower.
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ steps.platform-tag.outputs.arch }}

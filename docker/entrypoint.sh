@@ -28,16 +28,15 @@ else
     ip -brief link
 fi
 
-mkdir -p /etc/inferno /tmp/dante_player /opt/dante-player/data /root/.local/state/inferno_aoip /run
+mkdir -p /tmp/dante_player /opt/dante-player/data /root/.local/state/inferno_aoip /run
 chmod 777 /tmp/dante_player /run
 
-# 2. Configure and bind Statime & Inferno to the chosen interface
+# 2. Bind Inferno to the chosen interface. dante-player measures the Dante
+# grandmaster itself over PTPv1 and serves the media clock on this socket, so
+# there is no separate PTP daemon to start.
 export INFERNO_BIND_IP="$DANTE_IFACE"
 export INFERNO_CLOCK_PATH="/tmp/usrvclock"
-
-# Copy config to /tmp to avoid "Device or resource busy" on docker bind-mounts
-cp /etc/inferno/inferno-ptpv1.toml /tmp/inferno-ptpv1.toml
-sed -i "s/interface = \".*\"/interface = \"$DANTE_IFACE\"/g" /tmp/inferno-ptpv1.toml
+export DANTE_PTP_IFACE="$DANTE_IFACE"
 
 # Ensure kernel routes multicast (Dante PTP 224.0.1.129, mDNS 224.0.0.251, Audio 239.255.0.0/16) to Dante NIC
 ip link set "$DANTE_IFACE" multicast on 2>/dev/null || true
@@ -46,19 +45,8 @@ sysctl -w "net.ipv4.conf.$DANTE_IFACE.rp_filter=0" 2>/dev/null || true
 sysctl -w net.ipv4.conf.all.rp_filter=0 2>/dev/null || true
 ip route add 224.0.0.0/4 dev "$DANTE_IFACE" 2>/dev/null || true
 
-# 3. Start Statime PTP clock daemon in background on Dante interface
-echo "[PTP] Starting Statime clock daemon on interface $DANTE_IFACE..."
-RUST_LOG=debug statime -c /tmp/inferno-ptpv1.toml &
-STATIME_PID=$!
-
-# Trap signals for graceful shutdown
-cleanup() {
-    echo "Shutting down Dante services..."
-    kill $STATIME_PID 2>/dev/null || true
-    exit 0
-}
-# 4. Start Go Dante Web Player
+# 3. Start Go Dante Web Player. It holds the transmitter back until its PTPv1
+# listener has locked onto the grandmaster, so no startup delay is needed here.
 echo "[Web Player] Starting Dante Web Player on port ${HTTP_PORT:-8085}..."
-sleep 3
 exec dante-player -port "${HTTP_PORT:-8085}" -pipe-dir /tmp/dante_player -dante-name "${INFERNO_NAME:-Dante-Pi}" -config "/opt/dante-player/config.yaml"
 

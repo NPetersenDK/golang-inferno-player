@@ -1,14 +1,13 @@
 # syntax=docker/dockerfile:1
 # ==============================================================================
-# Self-contained multi-arch Dockerfile for Dante Audio Hub (Inferno + Statime).
+# Self-contained multi-arch Dockerfile for Dante Audio Hub (Inferno).
 #
 # Everything is built here: no prebuilt base or dependency image to keep in
-# sync. The Go player and both Rust artifacts are cross-compiled on the build
-# platform, so the only emulated work is the Debian runtime stage.
+# sync. The Go player and the Inferno ALSA module are cross-compiled on the
+# build platform, so the only emulated work is the Debian runtime stage.
 #
-# The Statime and Inferno stages both branch off rust-base, so BuildKit builds
-# them concurrently. They dominate a cold build - see docker-build.yml for how
-# the layer cache keeps them off the release path.
+# The Inferno build dominates a cold build - see docker-build.yml for how the
+# layer cache keeps it off the release path.
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -62,27 +61,7 @@ ENV CARGO_PROFILE_RELEASE_LTO=off
 ENV CARGO_PROFILE_RELEASE_STRIP=symbols
 
 # ------------------------------------------------------------------------------
-# Stage 3A: Build Upstream Statime (PTPv1 Clock Daemon)
-# ------------------------------------------------------------------------------
-FROM rust-base AS statime-builder
-ARG TARGETARCH
-
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    git clone --depth 1 --recurse-submodules --shallow-submodules -b inferno-dev https://github.com/teodly/statime /tmp/statime && \
-    cd /tmp/statime && \
-    if [ "$TARGETARCH" = "arm64" ]; then \
-      cargo build --release --target=aarch64-unknown-linux-gnu; \
-      TARGET_DIR="target/aarch64-unknown-linux-gnu/release"; \
-    else \
-      cargo build --release; \
-      TARGET_DIR="target/release"; \
-    fi && \
-    mkdir -p /out && \
-    (cp $TARGET_DIR/statime /out/ 2>/dev/null || cp $TARGET_DIR/statime-linux /out/statime 2>/dev/null || find $TARGET_DIR -maxdepth 1 -type f -executable -exec cp {} /out/statime \;)
-
-# ------------------------------------------------------------------------------
-# Stage 3B: Build Upstream Inferno ALSA Module
+# Stage 3: Build Upstream Inferno ALSA Module
 # ------------------------------------------------------------------------------
 FROM rust-base AS inferno-builder
 ARG TARGETARCH
@@ -101,6 +80,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # ------------------------------------------------------------------------------
 # Stage 4: Minimal Runtime Container
+#
+# No PTP daemon here: dante-player measures the Dante grandmaster itself with a
+# passive PTPv1 listener and serves the media clock over usrvclock.
 # ------------------------------------------------------------------------------
 FROM debian:bookworm-slim
 
@@ -122,11 +104,9 @@ RUN ALSA_DIR=$(dpkg -L libasound2 | grep -m1 'libasound\.so\.2$' | xargs dirname
     cp /tmp/libasound_module_pcm_inferno.so "$ALSA_DIR/" && \
     rm /tmp/libasound_module_pcm_inferno.so
 
-COPY --from=statime-builder /out/statime /usr/local/bin/
 COPY --from=go-builder /out/dante-player /usr/local/bin/
 
 COPY docker/asound.conf /etc/asound.conf
-COPY docker/inferno-ptpv1.toml /etc/inferno/inferno-ptpv1.toml
 # --chmod avoids a separate RUN layer, which on arm64 would run under emulation
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
