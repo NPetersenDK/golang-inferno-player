@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -318,6 +319,22 @@ func TestTuneFrequencyRejectsOutOfRange(t *testing.T) {
 	}
 	if err := tuner.TuneFrequency(3_000_000_000); err == nil {
 		t.Error("accepted a frequency above the tuner's range")
+	}
+}
+
+// Writing megahertz into a hertz field is the easy mistake, and a preset must
+// be checked as strictly as a typed-in frequency.
+func TestPresetFrequencyIsValidated(t *testing.T) {
+	tuner := &Tuner{cfg: config.TunerConfig{
+		Presets: []config.TunerPreset{{ID: "p4", Name: "P4", FrequencyHz: 964_000}},
+	}}
+
+	err := tuner.TunePreset("p4")
+	if err == nil {
+		t.Fatal("preset with 964000 Hz was accepted")
+	}
+	if !strings.Contains(err.Error(), "p4") {
+		t.Errorf("error %q does not name the offending preset", err)
 	}
 }
 

@@ -125,12 +125,11 @@ zones:
 #   gain: "auto"
 #   squelch: 0            # nonzero gates the audio, for scanner use
 #   presets:
-#     - id: "p3"
-#       name: "DR P3"
-#       frequency_hz: 96500000
-#     - id: "p4"
-#       name: "DR P4"
-#       frequency_hz: 92900000
+#     # In hertz, not megahertz: 96.4 MHz is 96400000, eight digits. The UI's
+#     # manual field takes megahertz instead, so 96.4 there.
+#     - id: "p4-trekanten"
+#       name: "P4 Trekanten"
+#       frequency_hz: 96400000
 
 # ------------------------------------------------------------------------------
 # Radio Stations & Audio Streams

@@ -110,6 +110,9 @@ func (t *Tuner) TunePreset(id string) error {
 	}
 	for _, p := range t.cfg.Presets {
 		if p.ID == id {
+			if err := checkFrequency(p.FrequencyHz); err != nil {
+				return fmt.Errorf("preset %q: %w", id, err)
+			}
 			return t.tune(p.ID, p.FrequencyHz)
 		}
 	}
@@ -121,10 +124,19 @@ func (t *Tuner) TuneFrequency(hz int64) error {
 	if t == nil {
 		return fmt.Errorf("tuner is not enabled")
 	}
-	if hz < 24_000_000 || hz > 1_766_000_000 {
-		return fmt.Errorf("%d Hz is outside the tuner's range", hz)
+	if err := checkFrequency(hz); err != nil {
+		return err
 	}
 	return t.tune("", hz)
+}
+
+// checkFrequency bounds the value to what an R820T tuner covers. The common
+// mistake is writing megahertz into a hertz field, which this catches.
+func checkFrequency(hz int64) error {
+	if hz < 24_000_000 || hz > 1_766_000_000 {
+		return fmt.Errorf("%d Hz is outside the tuner's 24 MHz - 1766 MHz range (96.4 MHz is 96400000)", hz)
+	}
+	return nil
 }
 
 func (t *Tuner) tune(presetID string, hz int64) error {
