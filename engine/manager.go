@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,6 +64,7 @@ func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
 
 	go mgr.eventBroadcaster()
 	go mgr.masterDanteAudioLoop()
+	go mgr.audioHealthLoop()
 
 	return mgr
 }
@@ -142,12 +144,14 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 			_, _ = stdin.Write(masterBuf)
 		}
 
-		ticker := time.NewTicker(20 * time.Millisecond)
+		// No ticker here on purpose. Writing to aplay blocks at exactly the rate
+		// ALSA drains the buffer, which ties this loop to the Dante media clock.
+		// A wall-clock ticker runs on a different oscillator than the
+		// grandmaster and, worse, silently drops ticks when the runtime is busy
+		// - and a dropped tick is a 20 ms hole that is never made up.
 		aplayAlive := true
 
 		for aplayAlive {
-			<-ticker.C
-
 			// 1. Clear 8-channel master buffer (silence by default)
 			for i := range masterBuf {
 				masterBuf[i] = 0
@@ -189,13 +193,42 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 			}
 		}
 
-		ticker.Stop()
 		_ = stdin.Close()
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
 		}
 		time.Sleep(2 * time.Second)
+	}
+}
+
+// audioHealthLoop reports how often a zone queue ran dry, so a glitch can be
+// counted instead of guessed at by ear. Silence here means the mixer never had
+// to substitute silence.
+func (m *PlaybackManager) audioHealthLoop() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	previous := make(map[int]uint64)
+	for range ticker.C {
+		var report []string
+		m.mu.RLock()
+		for _, id := range m.zoneOrder {
+			zone := m.zones[id]
+			if zone == nil {
+				continue
+			}
+			total := zone.StarvationCount()
+			if delta := total - previous[id]; delta > 0 {
+				report = append(report, fmt.Sprintf("zone %d: %d", id, delta))
+			}
+			previous[id] = total
+		}
+		m.mu.RUnlock()
+
+		if len(report) > 0 {
+			log.Printf("[Audio Health] queue ran dry in the last minute, 20 ms of silence each (%s)", strings.Join(report, ", "))
+		}
 	}
 }
 

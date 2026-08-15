@@ -24,6 +24,16 @@ const (
 	StatusError     PlaybackStatus = "error"
 )
 
+const (
+	// zonePrebufferChunks is how much decoded audio a zone queues before it
+	// starts delivering. FFmpeg produces at whatever rate the network hands it
+	// over, while the mixer consumes at the Dante media clock rate, so without
+	// slack the queue sits at zero and any jitter on the source turns into 20 ms
+	// of substituted silence - audible as a click even though the Dante packet
+	// itself leaves on time.
+	zonePrebufferChunks = 8 // ~160 ms at 20 ms per chunk
+)
+
 type ZoneState struct {
 	ID           int            `json:"id"`
 	Name         string         `json:"name"`
@@ -55,6 +65,11 @@ type ZonePlayer struct {
 
 	peakL atomic.Uint64 // float64 bits
 	peakR atomic.Uint64 // float64 bits
+
+	// primed is false until the queue has built up zonePrebufferChunks, and
+	// goes false again whenever it runs dry.
+	primed      bool
+	starvations atomic.Uint64
 
 	cancelFunc context.CancelFunc
 	stateChan  chan struct{}
@@ -130,6 +145,7 @@ func (z *ZonePlayer) Stop() {
 	z.streamURL = ""
 	z.title = ""
 	z.errMessage = ""
+	z.primed = false
 	z.mu.Unlock()
 
 	// Drain any pending audio frames
@@ -216,8 +232,12 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 		}
 	}()
 
+	// Status stays Buffering until PullSamples has built the prebuffer, so the
+	// UI reflects when a zone is actually feeding the mixer. This also covers
+	// the reconnect path, where the zone was Playing a moment ago.
 	z.mu.Lock()
-	z.status = StatusPlaying
+	z.status = StatusBuffering
+	z.primed = false
 	z.mu.Unlock()
 	z.notifyState()
 
@@ -272,62 +292,101 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 	}
 }
 
-// PullSamples pulls up to numFrames stereo samples (numFrames * 2 int32s), applies volume and updates peaks
+// PullSamples pulls up to numFrames stereo samples (numFrames * 2 int32s), applies volume and updates peaks.
+//
+// A zone delivers nothing until its queue holds zonePrebufferChunks, and it
+// goes back to rebuilding that prebuffer the moment the queue runs dry. Handing
+// out the single chunk that happens to be available would just glitch again on
+// the next tick.
 func (z *ZonePlayer) PullSamples(numFrames int) ([]int32, bool) {
-	select {
-	case samples := <-z.audioChan:
-		z.mu.RLock()
-		vol := z.volume
-		muted := z.muted
-		isPlaying := (z.status == StatusPlaying)
-		z.mu.RUnlock()
+	z.mu.RLock()
+	vol := z.volume
+	muted := z.muted
+	status := z.status
+	primed := z.primed
+	z.mu.RUnlock()
 
-		if !isPlaying {
-			z.setPeakL(0)
-			z.setPeakR(0)
-			return nil, false
-		}
-
-		volFactor := float64(vol) / 100.0
-		if muted {
-			volFactor = 0.0
-		}
-
-		var maxL, maxR int32
-		for i := 0; i < len(samples); i += 2 {
-			if volFactor != 1.0 {
-				samples[i] = int32(float64(samples[i]) * volFactor)
-			}
-			absL := absInt32(samples[i])
-			if absL > maxL {
-				maxL = absL
-			}
-
-			if i+1 < len(samples) {
-				if volFactor != 1.0 {
-					samples[i+1] = int32(float64(samples[i+1]) * volFactor)
-				}
-				absR := absInt32(samples[i+1])
-				if absR > maxR {
-					maxR = absR
-				}
-			}
-		}
-
-		peakL := float64(maxL) / float64(math.MaxInt32)
-		peakR := float64(maxR) / float64(math.MaxInt32)
-		z.setPeakL(peakL)
-		z.setPeakR(peakR)
-
-		return samples, true
-	default:
-		// No new audio frames (decay peaks)
-		curL := z.getPeakL()
-		curR := z.getPeakR()
-		z.setPeakL(curL * 0.9)
-		z.setPeakR(curR * 0.9)
+	if status != StatusPlaying && status != StatusBuffering {
+		z.setPeakL(0)
+		z.setPeakR(0)
 		return nil, false
 	}
+
+	if !primed {
+		if len(z.audioChan) < zonePrebufferChunks {
+			z.decayPeaks()
+			return nil, false
+		}
+		z.setPrimed(true)
+	}
+
+	var samples []int32
+	select {
+	case samples = <-z.audioChan:
+	default:
+		z.starvations.Add(1)
+		z.setPrimed(false)
+		z.decayPeaks()
+		return nil, false
+	}
+
+	volFactor := float64(vol) / 100.0
+	if muted {
+		volFactor = 0.0
+	}
+
+	var maxL, maxR int32
+	for i := 0; i < len(samples); i += 2 {
+		if volFactor != 1.0 {
+			samples[i] = int32(float64(samples[i]) * volFactor)
+		}
+		absL := absInt32(samples[i])
+		if absL > maxL {
+			maxL = absL
+		}
+
+		if i+1 < len(samples) {
+			if volFactor != 1.0 {
+				samples[i+1] = int32(float64(samples[i+1]) * volFactor)
+			}
+			absR := absInt32(samples[i+1])
+			if absR > maxR {
+				maxR = absR
+			}
+		}
+	}
+
+	z.setPeakL(float64(maxL) / float64(math.MaxInt32))
+	z.setPeakR(float64(maxR) / float64(math.MaxInt32))
+
+	return samples, true
+}
+
+// StarvationCount is the number of times the queue ran dry since start, i.e.
+// how many 20 ms holes were mixed into the Dante stream.
+func (z *ZonePlayer) StarvationCount() uint64 {
+	return z.starvations.Load()
+}
+
+func (z *ZonePlayer) setPrimed(primed bool) {
+	z.mu.Lock()
+	if z.primed == primed {
+		z.mu.Unlock()
+		return
+	}
+	z.primed = primed
+	if primed && z.status == StatusBuffering {
+		z.status = StatusPlaying
+	} else if !primed && z.status == StatusPlaying {
+		z.status = StatusBuffering
+	}
+	z.mu.Unlock()
+	z.notifyState()
+}
+
+func (z *ZonePlayer) decayPeaks() {
+	z.setPeakL(z.getPeakL() * 0.9)
+	z.setPeakR(z.getPeakR() * 0.9)
 }
 
 func (z *ZonePlayer) setError(msg string) {
