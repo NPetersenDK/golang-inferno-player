@@ -25,7 +25,8 @@ services:
       memlock: -1
     volumes:
       # Mount your custom config.yaml (copy from config.example.yaml)
-      - ./config.yaml:/opt/dante-player/config.yaml:ro
+      # Relative paths resolve against this file's directory, not your shell's
+      - ../config.yaml:/opt/dante-player/config.yaml:ro
       # Persistent storage for Dante Device State (so Dante Controller routing is never lost)
       - dante_state:/root/.local/state/inferno_aoip
       # Shared memory for low-latency audio buffering

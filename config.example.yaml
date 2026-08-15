@@ -54,8 +54,8 @@ zones:
   # up to you - librespot for Spotify Connect, shairport-sync for AirPlay, or
   # anything else. Omit the block entirely and nothing about the zone changes.
   #
-  # For Spotify, docker-compose.spotify.yml is a complete stack that runs the
-  # producer alongside the streamer; use it instead of docker-compose.yml.
+  # For Spotify, docker/compose.spotify.yml is a complete stack that runs the
+  # producer alongside the streamer; use it instead of docker/compose.yml.
   #
   # - id: 4
   #   name: "Spotify"

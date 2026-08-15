@@ -2,6 +2,9 @@
 # ==============================================================================
 # Self-contained multi-arch Dockerfile for Dante Audio Hub (Inferno).
 #
+# Build context is the repository root, not this directory:
+#   docker build -f docker/streamer/Dockerfile .
+#
 # Everything is built here: no prebuilt base or dependency image to keep in
 # sync. The Go player and the Inferno ALSA module are cross-compiled on the
 # build platform, so the only emulated work is the Debian runtime stage.
@@ -106,9 +109,9 @@ RUN ALSA_DIR=$(dpkg -L libasound2 | grep -m1 'libasound\.so\.2$' | xargs dirname
 
 COPY --from=go-builder /out/dante-player /usr/local/bin/
 
-COPY docker/asound.conf /etc/asound.conf
+COPY docker/streamer/asound.conf /etc/asound.conf
 # --chmod avoids a separate RUN layer, which on arm64 would run under emulation
-COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=0755 docker/streamer/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 ENV INFERNO_NAME="Dante-Pi"
 ENV INFERNO_TX_CHANNELS=8

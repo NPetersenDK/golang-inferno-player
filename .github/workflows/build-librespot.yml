@@ -1,0 +1,91 @@
+name: Build & Publish Spotify Producer Image
+
+# Builds the optional Spotify Connect producer used by docker/compose.spotify.yml.
+#
+# This is a separate image with its own lifecycle. The main streamer image does
+# not depend on it in any way - it is only referenced by the optional Spotify
+# compose file, and users who do not want Spotify never pull it.
+#
+# Its content tracks upstream rather than this repository - it comes from
+# raspotify's prebuilt .deb - so the monthly rebuild is what keeps it current
+# with raspotify releases and Debian security updates. Release tags build it too
+# so a fresh checkout always has a matching image to pull, and so the producer
+# can be pinned to the same version as the streamer.
+#
+# Note there is no paths filter: within a single push event GitHub ANDs tags and
+# paths, so combining them would mean the workflow only ran when a tag and a
+# Dockerfile change landed together. Edit the Dockerfile without tagging and run
+# it by hand instead.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*.*'
+  schedule:
+    - cron: '0 4 1 * *'
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: npetersendk/dante-librespot
+
+jobs:
+  publish:
+    name: Build & Publish Multi-Arch Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # The image installs packages for the target architecture, so the non-x86
+      # builds run under emulation. That is only a download and an extract, not
+      # a compile, so it stays cheap.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64,arm
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata (tags & labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=semver,pattern={{version}}
+            type=sha,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/librespot/Dockerfile
+          # Matches the architectures raspotify publishes packages for, minus
+          # riscv64. ARMv6 is unsupported upstream.
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Inspect published image
+        run: |
+          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest || true

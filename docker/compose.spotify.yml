@@ -1,14 +1,23 @@
-# Full stack: Dante streamer plus a Spotify Connect source.
+# Full stack with a Spotify Connect source.
 #
-# Standalone - use this INSTEAD of docker-compose.yml, not alongside it:
+# Standalone - use this INSTEAD of compose.yml, not alongside it:
 #
-#   docker compose -f docker-compose.spotify.yml up -d
+#   docker compose -f docker/compose.spotify.yml up -d
+#
+# Nothing is built locally and nothing is installed on the host. librespot
+# publishes no official image, so this project publishes one: the build-librespot
+# workflow takes the finished .deb from raspotify's apt repository and runs the
+# binary directly. See docker/librespot/Dockerfile.
 #
 # Nothing in the base project depends on this file, and the main image contains
 # no Spotify code. The engine only knows how to read raw PCM from a FIFO;
 # librespot is simply one thing that can write to one. Swap it for
-# shairport-sync or anything else and the engine needs no changes.
+# shairport-sync or anything else and the engine needs no changes - adjust
+# format/sample_rate/channels in the source block to match whatever the producer
+# emits and FFmpeg resamples it to the Dante clock.
 #
+# Zone setup
+# ----------
 # Give a zone a matching source block in config.yaml:
 #
 #   - id: 4
@@ -33,7 +42,7 @@
 #
 # dante-streamer creates the FIFO (mode 0666, in a directory it chmods to 0777)
 # because the producer may run as a different user. It also holds the pipe open
-# read-write for its whole life, so pausing or disconnecting the producer never
+# read-write for its whole life, so pausing or disconnecting Spotify never
 # reaches the reader as EOF.
 #
 # Start order is not guaranteed by depends_on, only container start is. If the
@@ -68,7 +77,8 @@ services:
       memlock: -1
     volumes:
       # Mount your custom config.yaml (copy from config.example.yaml)
-      - ./config.yaml:/opt/dante-player/config.yaml:ro
+      # Relative paths resolve against this file's directory, not your shell's
+      - ../config.yaml:/opt/dante-player/config.yaml:ro
       # Persistent storage for Dante Device State (so Dante Controller routing is never lost)
       - dante_state:/root/.local/state/inferno_aoip
       # Shared memory for low-latency audio buffering
@@ -77,11 +87,7 @@ services:
       - dante_pipes:/tmp/dante_player
 
   librespot:
-    # NOTE: verify this image reference before relying on it, and see the README
-    # on picking a Spotify Connect implementation. Nothing else in this file or
-    # in the project depends on which one you use - it only has to write raw PCM
-    # to the FIFO below.
-    image: ghcr.io/librespot-org/librespot:latest
+    image: ghcr.io/npetersendk/dante-librespot:latest
     container_name: dante-librespot
     restart: unless-stopped
     # Spotify Connect advertises itself over zeroconf, so it needs the host
@@ -91,13 +97,15 @@ services:
       - dante-streamer
     volumes:
       - dante_pipes:/tmp/dante_player
+    # volume-ctrl fixed leaves level to your mixer. Otherwise Spotify's own
+    # slider scales the samples before they ever reach Dante.
     command: >
       --name "Dante-Pi"
       --backend pipe
       --device /tmp/dante_player/spotify.pcm
       --bitrate 320
-      --initial-volume 100
       --volume-ctrl fixed
+      --initial-volume 100
 
 volumes:
   dante_state:

@@ -16,7 +16,7 @@ The recommended way to run Dante Streamer on a Raspberry Pi is using Docker Comp
 
 ### 1. Create a Directory and Copy the Compose File
 
-On your Raspberry Pi, create a folder and create docker-compose.yml:
+On your Raspberry Pi, create a folder and create a `compose.yml` (the same file lives in this repo at `docker/compose.yml`):
 
 ```yaml
 services:
@@ -109,7 +109,7 @@ http://<raspberry-pi-ip>:8085
 
 When running on a Raspberry Pi with multiple network interfaces (for example, built-in eth0 or end0 for management, and a dedicated USB Ethernet adapter eth1 connected to the Dante network):
 
-Set DANTE_INTERFACE in docker-compose.yml to the network interface connected to the Dante network:
+Set DANTE_INTERFACE in your compose file to the network interface connected to the Dante network:
 - DANTE_INTERFACE=eth1
 
 The entrypoint script automatically:
@@ -160,25 +160,29 @@ The zone then attaches to that FIFO at startup and stays there permanently: it d
 
 The engine only knows how to read raw PCM from a FIFO — it has no idea what Spotify is. Anything that can write to a pipe works, and FFmpeg resamples whatever rate the producer uses to the 48 kHz Dante clock. Nothing in the base image depends on any of this: omit the `source` block and the feature does not exist.
 
-### Sharing the pipe between containers
+### Spotify Connect
 
-Mount the same named volume at the same path in both containers. A FIFO is an inode on a filesystem, so once both see the same directory they are looking at the same pipe, and it behaves exactly as it would between two processes on one host.
-
-`docker-compose.spotify.yml` is a complete stack — use it **instead of** `docker-compose.yml`, not alongside it:
+`docker/compose.spotify.yml` is a complete stack — use it **instead of** `docker/compose.yml`, not alongside it:
 
 ```bash
-docker compose -f docker-compose.spotify.yml up -d
+docker compose -f docker/compose.spotify.yml up -d
 ```
 
-The two files therefore duplicate the `dante-streamer` service. If you change the base file, mirror it here.
+Nothing is built locally and nothing is installed on the host. The two compose files duplicate the `dante-streamer` service, so mirror any change you make to the base one.
 
-The player creates the FIFO with mode `0666` inside a directory it chmods to `0777`, because the producer usually runs as a different user, and it holds the pipe open read-write for its whole life so a producer that pauses or disconnects never reaches the reader as EOF. If the producer starts first and creates a plain file at the path, the player replaces it with a real FIFO and logs that it did.
+librespot publishes no official image, so this project publishes one at `ghcr.io/npetersendk/dante-librespot`, built for amd64, arm64 and armhf by the `build-librespot` workflow. It takes the finished `.deb` from **raspotify**'s apt repository and runs `/usr/bin/librespot` directly, bypassing the systemd unit the package ships — a package download rather than a Rust build. ARMv6 (Pi 1, Pi Zero v1) is not supported upstream.
 
-### Choosing a Spotify Connect implementation
+That image has its own lifecycle and is rebuilt monthly to track raspotify releases and Debian updates. The streamer image does not depend on it; if you never enable a Spotify source you never pull it.
 
-Note that **raspotify is not an alternative to librespot — it packages librespot**. It is a Debian package that installs the same player as a systemd service on Raspberry Pi OS, so it neither escapes librespot nor fits a container well. Running librespot directly is strictly simpler.
+Raspotify's own `Dockerfile` is not usable here — it is the build container they cross-compile the packages in, with no `ENTRYPOINT`.
 
-If you want a genuinely different implementation, `go-librespot` is a separate reimplementation with its own pipe and ALSA outputs. Either way, the choice is entirely yours: the engine only requires raw PCM on a FIFO, so swapping the producer is a change to the compose overlay and nothing else.
+### How the pipe is shared
+
+A FIFO is an inode on a filesystem, not a network object, so mounting the same named volume at the same path in both containers is enough for them to be looking at the same pipe.
+
+The player creates the FIFO with mode `0666`, because the producer runs as its own user, and holds it open read-write for its whole life so a producer that pauses or disconnects never reaches the reader as EOF. If the producer starts first and creates a plain file at the path, the player replaces it with a real FIFO and logs that it did.
+
+The same arrangement works for any producer that can write raw PCM to a pipe — shairport-sync for AirPlay, for instance. Point it at the FIFO and set `format`, `sample_rate` and `channels` in the source block to match what it emits.
 
 ## PTP Clock Synchronization & Embedded `usrvclock` Driver
 
