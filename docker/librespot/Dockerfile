@@ -43,12 +43,17 @@ RUN curl -fsSL https://dtcooper.github.io/raspotify/key.asc \
 # Extract rather than install: the package ships a systemd unit whose maintainer
 # scripts have nothing to talk to inside a container, and all we want is
 # /usr/bin/librespot.
+#
+# Extract into a staging directory, never onto /. Debian is usrmerged, so /lib
+# is a symlink to usr/lib - unpacking a package that carries a real ./lib
+# directory replaces that symlink with an empty directory, which takes the
+# dynamic linker with it and leaves every binary in the image unrunnable.
 RUN apt-get update && \
     apt-get download raspotify && \
-    ls -l raspotify_*.deb && \
-    dpkg-deb -x raspotify_*.deb / && \
-    rm -f raspotify_*.deb && \
-    rm -rf /var/lib/apt/lists/*
+    dpkg-deb -x raspotify_*.deb /tmp/raspotify && \
+    cp /tmp/raspotify/usr/bin/librespot /usr/bin/librespot && \
+    chmod 0755 /usr/bin/librespot && \
+    rm -rf /tmp/raspotify raspotify_*.deb /var/lib/apt/lists/*
 
 # Fail the build here rather than at runtime if the binary cannot start - a
 # missing shared library or a bad architecture shows up immediately.
