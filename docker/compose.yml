@@ -1,22 +1,24 @@
+#   docker compose -f docker/compose.yml up -d
+#
+# For a Spotify Connect source, use compose.spotify.yml instead.
+
 services:
   dante-streamer:
     image: ghcr.io/npetersendk/golang-inferno-player:latest
     container_name: dante-streamer
     restart: unless-stopped
-    # Host networking gives direct access to the USB Dante adapter, multicast & PTP clock
+    # Host network for the Dante NIC, multicast and PTP.
     network_mode: host
     environment:
-      # Network interface dedicated to Dante (e.g. eth1, usb0, enx..., or built-in eth0/end0)
+      # Interface dedicated to Dante (eth1, usb0, enx..., end0, ...)
       - DANTE_INTERFACE=eth1
       - INFERNO_NAME=Dante-Pi
       - INFERNO_TX_CHANNELS=8
       - INFERNO_SAMPLE_RATE=48000
       - HTTP_PORT=8085
     cap_add:
-      # NET_ADMIN: entrypoint sets allmulticast and rp_filter on the Dante NIC.
-      # SYS_NICE: real-time priority for the Inferno transmit thread.
-      # SYS_TIME is deliberately absent - the PTP listener never touches the
-      # system clock, it serves an overlay on top of it instead.
+      # SYS_TIME is deliberately absent: the PTP listener serves a clock overlay
+      # rather than touching the system clock.
       - NET_ADMIN
       - NET_RAW
       - SYS_NICE
@@ -24,12 +26,12 @@ services:
       rtprio: 95
       memlock: -1
     volumes:
-      # Mount your custom config.yaml (copy from config.example.yaml)
-      # Relative paths resolve against this file's directory, not your shell's
-      - ../config.yaml:/opt/dante-player/config.yaml:ro
-      # Persistent storage for Dante Device State (so Dante Controller routing is never lost)
+      # Default is relative to this file, not your shell. Set DANTE_CONFIG when
+      # copying this file elsewhere - a wrong path makes Docker create a
+      # directory rather than fail.
+      - ./config.yaml:/opt/dante-player/config.yaml:ro
+      # Keeps Dante Controller routing across restarts.
       - dante_state:/root/.local/state/inferno_aoip
-      # Shared memory for low-latency audio buffering
       - /dev/shm:/dev/shm
 
 volumes:

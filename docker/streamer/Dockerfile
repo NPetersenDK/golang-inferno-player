@@ -1,20 +1,12 @@
 # syntax=docker/dockerfile:1
-# ==============================================================================
-# Self-contained multi-arch Dockerfile for Dante Audio Hub (Inferno).
-#
-# Build context is the repository root, not this directory:
+# Dante Audio Hub. Build context is the repository root, not this directory:
 #   docker build -f docker/streamer/Dockerfile .
 #
-# Everything is built here: no prebuilt base or dependency image to keep in
-# sync. The Go player and the Inferno ALSA module are cross-compiled on the
-# build platform, so the only emulated work is the Debian runtime stage.
-#
-# The Inferno build dominates a cold build - see docker-build.yml for how the
-# layer cache keeps it off the release path.
-# ==============================================================================
+# The Go player and the Inferno ALSA module are cross-compiled on the build
+# platform, so only the Debian runtime stage runs under emulation.
 
 # ------------------------------------------------------------------------------
-# Stage 1: Build Dante Web Player (Go - runs in ~2s)
+# Stage 1: Dante Web Player (Go)
 # ------------------------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS go-builder
 ARG TARGETOS
@@ -28,7 +20,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/dante-player .
 
 # ------------------------------------------------------------------------------
-# Stage 2: Shared Rust Cross-Compilation Base (Apt runs only once!)
+# Stage 2: Shared Rust cross-compilation base, so apt runs only once
 # ------------------------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM rust:1-slim-bookworm AS rust-base
 ARG TARGETARCH
@@ -57,14 +49,13 @@ ENV CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
 ENV CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
 ENV PKG_CONFIG_PATH_aarch64_unknown_linux_gnu=/usr/lib/aarch64-linux-gnu/pkgconfig
 ENV PKG_CONFIG_ALLOW_CROSS=1
-# Speed up Cargo builds: 16 parallel codegen units and disable heavy whole-program LTO.
-# Stripping symbols cuts link time and image size; nothing here is debugged in place.
+# Parallel codegen, no whole-program LTO, stripped: build time over runtime speed.
 ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
 ENV CARGO_PROFILE_RELEASE_LTO=off
 ENV CARGO_PROFILE_RELEASE_STRIP=symbols
 
 # ------------------------------------------------------------------------------
-# Stage 3: Build Upstream Inferno ALSA Module
+# Stage 3: Upstream Inferno ALSA module
 # ------------------------------------------------------------------------------
 FROM rust-base AS inferno-builder
 ARG TARGETARCH
@@ -82,10 +73,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     fi
 
 # ------------------------------------------------------------------------------
-# Stage 4: Minimal Runtime Container
-#
-# No PTP daemon here: dante-player measures the Dante grandmaster itself with a
-# passive PTPv1 listener and serves the media clock over usrvclock.
+# Stage 4: Runtime. No PTP daemon: dante-player measures the grandmaster itself.
 # ------------------------------------------------------------------------------
 FROM debian:bookworm-slim
 
@@ -100,7 +88,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Inferno ALSA module dynamically into system alsa-lib folder
+# The alsa-lib plugin directory is multiarch-specific, so ask dpkg where it is.
 COPY --from=inferno-builder /out/libasound_module_pcm_inferno.so /tmp/libasound_module_pcm_inferno.so
 RUN ALSA_DIR=$(dpkg -L libasound2 | grep -m1 'libasound\.so\.2$' | xargs dirname)/alsa-lib && \
     mkdir -p "$ALSA_DIR" && \

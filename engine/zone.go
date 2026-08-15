@@ -260,6 +260,10 @@ func (z *ZonePlayer) StartSource() error {
 // sourceLoop keeps a decoder attached to the FIFO. FFmpeg does the resampling,
 // so a 44.1 kHz producer such as librespot lands on the 48 kHz Dante clock
 // without the producer having to know anything about it.
+//
+// It reads with backpressure, which is what paces the producer: a full queue
+// blocks the reader, FFmpeg's pipe fills, and the producer's own write blocks.
+// Drain the FIFO as fast as it is written and the producer has no clock at all.
 func (z *ZonePlayer) sourceLoop(ctx context.Context, src config.ZoneSource) {
 	args := []string{
 		"-hide_banner",
@@ -279,7 +283,7 @@ func (z *ZonePlayer) sourceLoop(ctx context.Context, src config.ZoneSource) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := z.decodeInto(ctx, args); err != nil && ctx.Err() == nil {
+		if err := z.decodeInto(ctx, args, true); err != nil && ctx.Err() == nil {
 			log.Printf("[Zone %d] Source decoder stopped: %v, restarting", z.cfg.ID, err)
 		}
 		select {
@@ -360,7 +364,7 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 	z.emptyPulls.Store(0)
 	z.notifyState()
 
-	err := z.decodeInto(ctx, ffmpegArgs)
+	err := z.decodeInto(ctx, ffmpegArgs, false)
 	if ctx.Err() != nil {
 		return
 	}
@@ -377,9 +381,9 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 
 // decodeInto runs FFmpeg with the given arguments and pumps its raw 48 kHz
 // stereo output into the zone queue until it exits or the context is cancelled.
-// Both the station path and the source path share it, so they get identical
-// buffering behaviour.
-func (z *ZonePlayer) decodeInto(ctx context.Context, args []string) error {
+// Both the station path and the source path share it; backpressure is what
+// distinguishes them, see enqueue.
+func (z *ZonePlayer) decodeInto(ctx context.Context, args []string, backpressure bool) error {
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -417,20 +421,43 @@ func (z *ZonePlayer) decodeInto(ctx context.Context, args []string) error {
 			samples[i] = int32(binary.LittleEndian.Uint32(rawBuf[i*4 : (i+1)*4]))
 		}
 
+		if err := z.enqueue(ctx, samples, backpressure); err != nil {
+			return err
+		}
+	}
+}
+
+// enqueue hands one chunk to the mixer.
+//
+// A station stream is paced by the network and cannot be told to wait, so a
+// full queue drops the oldest chunk rather than stalling the reader. A pipe
+// producer is the exact opposite: it writes as fast as we drain, so it has to
+// be blocked. Without that backpressure librespot races through a whole track
+// in milliseconds and Spotify appears to skip.
+func (z *ZonePlayer) enqueue(ctx context.Context, samples []int32, backpressure bool) error {
+	if backpressure {
 		select {
 		case z.audioChan <- samples:
 		case <-ctx.Done():
 			return ctx.Err()
-		default:
-			// Queue full: drop the oldest chunk, which bounds added latency
-			// when the producer outruns the Dante clock.
-			select {
-			case <-z.audioChan:
-			default:
-			}
-			z.audioChan <- samples
 		}
+		return nil
 	}
+
+	select {
+	case z.audioChan <- samples:
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		// Queue full: drop the oldest chunk, which bounds added latency when
+		// the source outruns the Dante clock.
+		select {
+		case <-z.audioChan:
+		default:
+		}
+		z.audioChan <- samples
+	}
+	return nil
 }
 
 // PullSamples pulls up to numFrames stereo samples (numFrames * 2 int32s), applies volume and updates peaks.

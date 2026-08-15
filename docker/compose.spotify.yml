@@ -1,74 +1,24 @@
-# Full stack with a Spotify Connect source.
-#
-# Standalone - use this INSTEAD of compose.yml, not alongside it:
+# Full stack with a Spotify Connect source. Use INSTEAD of compose.yml:
 #
 #   docker compose -f docker/compose.spotify.yml up -d
 #
-# Nothing is built locally and nothing is installed on the host. librespot
-# publishes no official image, so this project publishes one: the build-librespot
-# workflow takes the finished .deb from raspotify's apt repository and runs the
-# binary directly. See docker/librespot/Dockerfile.
-#
-# Nothing in the base project depends on this file, and the main image contains
-# no Spotify code. The engine only knows how to read raw PCM from a FIFO;
-# librespot is simply one thing that can write to one. Swap it for
-# shairport-sync or anything else and the engine needs no changes - adjust
-# format/sample_rate/channels in the source block to match whatever the producer
-# emits and FFmpeg resamples it to the Dante clock.
-#
-# Zone setup
-# ----------
-# Give a zone a matching source block in config.yaml:
-#
-#   - id: 4
-#     name: Spotify
-#     dante_left: "Spotify L (Ch 7)"
-#     dante_right: "Spotify R (Ch 8)"
-#     source:
-#       type: pipe
-#       path: /tmp/dante_player/spotify.pcm
-#       label: Spotify
-#       prebuffer_ms: 300
-#
-# The zone then belongs to Spotify permanently: it disappears from the station
-# target list and Stop All leaves it alone.
-#
-# How the two containers share the pipe
-# -------------------------------------
-# A named volume mounted at the same path in both. A FIFO is an inode on a
-# filesystem, not a network object, so once both containers have the same
-# directory mounted they are looking at the same pipe and it works exactly as it
-# would between two processes on one host.
-#
-# dante-streamer creates the FIFO (mode 0666, in a directory it chmods to 0777)
-# because the producer may run as a different user. It also holds the pipe open
-# read-write for its whole life, so pausing or disconnecting Spotify never
-# reaches the reader as EOF.
-#
-# Start order is not guaranteed by depends_on, only container start is. If the
-# producer wins the race and creates a plain file at the path, dante-streamer
-# replaces it with a real FIFO and logs that it did. Combined with
-# restart: unless-stopped on the producer, the pair converges on its own.
+# Requires a zone with a matching source block in config.yaml. See the README.
 
 services:
   dante-streamer:
     image: ghcr.io/npetersendk/golang-inferno-player:latest
     container_name: dante-streamer
     restart: unless-stopped
-    # Host networking gives direct access to the USB Dante adapter, multicast & PTP clock
     network_mode: host
     environment:
-      # Network interface dedicated to Dante (e.g. eth1, usb0, enx..., or built-in eth0/end0)
       - DANTE_INTERFACE=eth1
       - INFERNO_NAME=Dante-Pi
       - INFERNO_TX_CHANNELS=8
       - INFERNO_SAMPLE_RATE=48000
       - HTTP_PORT=8085
     cap_add:
-      # NET_ADMIN: entrypoint sets allmulticast and rp_filter on the Dante NIC.
-      # SYS_NICE: real-time priority for the Inferno transmit thread.
-      # SYS_TIME is deliberately absent - the PTP listener never touches the
-      # system clock, it serves an overlay on top of it instead.
+      # SYS_TIME is deliberately absent: the PTP listener serves a clock overlay
+      # rather than touching the system clock.
       - NET_ADMIN
       - NET_RAW
       - SYS_NICE
@@ -76,36 +26,43 @@ services:
       rtprio: 95
       memlock: -1
     volumes:
-      # Mount your custom config.yaml (copy from config.example.yaml)
-      # Relative paths resolve against this file's directory, not your shell's
-      - ../config.yaml:/opt/dante-player/config.yaml:ro
-      # Persistent storage for Dante Device State (so Dante Controller routing is never lost)
+      # Default is relative to this file, not your shell. Set DANTE_CONFIG when
+      # copying this file elsewhere - a wrong path makes Docker create a
+      # directory rather than fail.
+      - ./config.yaml:/opt/dante-player/config.yaml:ro
       - dante_state:/root/.local/state/inferno_aoip
-      # Shared memory for low-latency audio buffering
       - /dev/shm:/dev/shm
-      # The FIFO directory shared with the producer below
       - dante_pipes:/tmp/dante_player
 
   librespot:
     image: ghcr.io/npetersendk/dante-librespot:latest
     container_name: dante-librespot
     restart: unless-stopped
-    # Spotify Connect advertises itself over zeroconf, so it needs the host
-    # network to be discoverable from phones on the LAN.
+    # Host network so Spotify Connect is discoverable from the LAN.
     network_mode: host
     depends_on:
       - dante-streamer
     volumes:
       - dante_pipes:/tmp/dante_player
-    # volume-ctrl fixed leaves level to your mixer. Otherwise Spotify's own
-    # slider scales the samples before they ever reach Dante.
-    command: >
-      --name "Dante-Pi"
-      --backend pipe
-      --device /tmp/dante_player/spotify.pcm
-      --bitrate 320
-      --volume-ctrl fixed
-      --initial-volume 100
+      # raspotify builds librespot with only the Avahi zeroconf backend, so
+      # discovery needs an Avahi daemon over the system D-Bus.
+      - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
+    # List form, not a folded string: the argv must reach librespot exactly.
+    # Without --device the pipe backend falls back to stdout, which Docker
+    # swallows instantly, so tracks "play" in milliseconds and skip.
+    command:
+      - --name
+      - Dante-Pi
+      - --backend
+      - pipe
+      - --device
+      - /tmp/dante_player/spotify.pcm
+      - --bitrate
+      - "320"
+      - --volume-ctrl
+      - log
+      - --initial-volume
+      - "10"
 
 volumes:
   dante_state:

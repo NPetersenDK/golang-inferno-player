@@ -174,6 +174,24 @@ librespot publishes no official image, so this project publishes one at `ghcr.io
 
 That image has its own lifecycle and is rebuilt monthly to track raspotify releases and Debian updates. The streamer image does not depend on it; if you never enable a Spotify source you never pull it.
 
+**Discovery needs Avahi.** raspotify compiles librespot with only the Avahi zeroconf backend, so `libmdns` and `dns-sd` are not in the binary and it must reach an Avahi daemon over the system D-Bus. Without one it logs `Avahi error: Setting up dns-sd failed` and exits. The compose file lends the container the host's socket:
+
+```yaml
+      - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
+```
+
+Raspberry Pi OS already runs `avahi-daemon` — it is what serves your `.local` hostname — so this costs no installation, and it avoids two daemons competing for UDP 5353 on the host network. Confirm with `systemctl status avahi-daemon`, and `sudo apt install avahi-daemon` if it is genuinely absent.
+
+### Pointing at your config
+
+The compose files default to `../config.yaml`, which is relative to **the compose file**, so it resolves to the repository root. If you copy a compose file somewhere else, set `DANTE_CONFIG` to match:
+
+```bash
+DANTE_CONFIG=./config.yaml docker compose up -d
+```
+
+Get this wrong and there is no friendly error: Docker silently creates a *directory* at a bind source that does not exist, and the player logs `Could not read config file ...: is a directory`. Delete the stray directory before retrying.
+
 Raspotify's own `Dockerfile` is not usable here — it is the build container they cross-compile the packages in, with no `ENTRYPOINT`.
 
 ### How the pipe is shared

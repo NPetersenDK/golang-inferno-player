@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"dante-player/config"
 )
@@ -154,6 +156,56 @@ func TestZoneWithoutSourceIsUnchanged(t *testing.T) {
 	}
 	if st := z.GetState(); st.IsSource || st.SourceLabel != "" {
 		t.Errorf("plain zone exposed source fields: %+v", st)
+	}
+}
+
+// Backpressure is the only thing pacing a pipe producer. Without it librespot
+// writes a whole track in milliseconds and Spotify appears to skip.
+func TestEnqueueBlocksWhenBackpressureRequested(t *testing.T) {
+	z := newTestZone()
+	pushChunks(z, zoneQueueChunks) // queue full
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- z.enqueue(ctx, make([]int32, 1920), true) }()
+
+	select {
+	case <-done:
+		t.Fatal("enqueue returned on a full queue instead of blocking the producer")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// Draining one chunk must let it through.
+	<-z.audioChan
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("enqueue failed after the queue drained: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("enqueue stayed blocked after the queue drained")
+	}
+	cancel()
+}
+
+// A live station cannot be told to wait, so a full queue must drop instead.
+func TestEnqueueDropsOldestWithoutBackpressure(t *testing.T) {
+	z := newTestZone()
+	pushChunks(z, zoneQueueChunks)
+
+	done := make(chan error, 1)
+	go func() { done <- z.enqueue(context.Background(), make([]int32, 1920), false) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("enqueue failed: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("enqueue blocked on a full queue instead of dropping the oldest chunk")
+	}
+	if got := len(z.audioChan); got != zoneQueueChunks {
+		t.Errorf("queue holds %d chunks, want it still full at %d", got, zoneQueueChunks)
 	}
 }
 
