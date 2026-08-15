@@ -283,6 +283,26 @@ func TestEnqueueDropsOldestWithoutBackpressure(t *testing.T) {
 	}
 }
 
+// Inferno republishes FreqScale as a frequency offset in a heartbeat that
+// reaches every device on the segment, and ours is orders of magnitude larger
+// than a slaved device's because we never discipline anything.
+func TestFreqScaleIsWithheldByDefault(t *testing.T) {
+	d := &ClockDiscipline{shiftNs: -1_785_713_638_806_000_000, freqScale: -83.13e-6}
+
+	shift, freq := d.Overlay()
+	if shift != -1_785_713_638_806_000_000 {
+		t.Errorf("shift %d was altered", shift)
+	}
+	if freq != 0 {
+		t.Errorf("freq scale %v was published, want 0", freq)
+	}
+
+	d.publishFreq = true
+	if _, freq = d.Overlay(); freq != -83.13e-6 {
+		t.Errorf("freq scale %v with publishing enabled, want the measured value", freq)
+	}
+}
+
 // Every tuner method has to be safe on a nil receiver, since that is what an
 // unconfigured tuner is.
 func TestNilTunerIsInert(t *testing.T) {

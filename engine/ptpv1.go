@@ -480,9 +480,10 @@ type ClockDiscipline struct {
 	lastTick    time.Time
 	lastLog     time.Time
 
-	staticNs   int64
-	stepNs     int64
-	maxSlewPPM float64
+	staticNs    int64
+	stepNs      int64
+	maxSlewPPM  float64
+	publishFreq bool
 
 	// Closed once the grandmaster has been measured for the first time, so the
 	// audio pipeline can hold off until the big initial step is behind it.
@@ -497,18 +498,19 @@ type ClockDiscipline struct {
 // gets a valid overlay immediately and never hits its 5 second timeout.
 func StartClockDiscipline(ptp *PTPMonitor) *ClockDiscipline {
 	d := &ClockDiscipline{
-		ptp:        ptp,
-		staticNs:   envMillisToNs("DANTE_PTP_OFFSET_MS", 665),
-		stepNs:     envMillisToNs("DANTE_PTP_STEP_MS", 5),
-		maxSlewPPM: envFloat("DANTE_PTP_MAX_SLEW_PPM", 500),
-		lastTick:   time.Now(),
-		acquiredCh: make(chan struct{}),
-		stopChan:   make(chan struct{}),
+		ptp:         ptp,
+		staticNs:    envMillisToNs("DANTE_PTP_OFFSET_MS", 665),
+		stepNs:      envMillisToNs("DANTE_PTP_STEP_MS", 5),
+		maxSlewPPM:  envFloat("DANTE_PTP_MAX_SLEW_PPM", 500),
+		publishFreq: os.Getenv("DANTE_PUBLISH_FREQ_SCALE") == "1",
+		lastTick:    time.Now(),
+		acquiredCh:  make(chan struct{}),
+		stopChan:    make(chan struct{}),
 	}
 	d.shiftNs = d.staticNs
 
-	log.Printf("[Clock] discipline started: static fallback %.3f ms, step threshold %.3f ms, max slew %.0f ppm",
-		float64(d.staticNs)/1e6, float64(d.stepNs)/1e6, d.maxSlewPPM)
+	log.Printf("[Clock] discipline started: static fallback %.3f ms, step threshold %.3f ms, max slew %.0f ppm, publish freq offset %v",
+		float64(d.staticNs)/1e6, float64(d.stepNs)/1e6, d.maxSlewPPM, d.publishFreq)
 
 	go d.run()
 	return d
@@ -523,9 +525,24 @@ func (d *ClockDiscipline) Stop() {
 }
 
 // Overlay returns the values to put in the next usrvclock frame.
+//
+// FreqScale is withheld by default. Inferno republishes it as a frequency
+// offset in its once-per-second heartbeat to 224.0.0.233, a link-local group
+// switches flood to every port. We measure the raw difference between this
+// host's crystal and the grandmaster - tens of thousands of ppb - because we
+// never discipline anything, we only add an overlay. A real Dante device is
+// physically slaved and reports a value orders of magnitude smaller, so ours is
+// unlike anything else on the segment, and it reaches every device on it.
+//
+// Dropping it costs at most a few microseconds of extrapolation between the
+// 250 ms overlay updates, against a 10 ms receiver budget. Set
+// DANTE_PUBLISH_FREQ_SCALE=1 to restore the old behaviour.
 func (d *ClockDiscipline) Overlay() (shiftNs int64, freqScale float64) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
+	if !d.publishFreq {
+		return d.shiftNs, 0
+	}
 	return d.shiftNs, d.freqScale
 }
 
