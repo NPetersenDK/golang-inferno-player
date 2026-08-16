@@ -276,6 +276,17 @@ To ensure rock-solid stability and zero startup latency, this project includes a
 - **No PTP Daemon:** A passive PTPv1 listener ([`engine/ptpv1.go`](file:///e:/Git/tmpshit/dante/golang-inferno-player/engine/ptpv1.go)) measures the grandmaster's phase and rate straight off the wire and feeds them into the overlay. It never transmits, never runs the BMCA and never touches the system clock, so no external daemon and no `SYS_TIME` capability are required.
 - **Continuous Phase Locking:** The measured offset is slewed rather than stepped once locked, so the media clock stays continuous under a running Dante flow. The status bar reports the live sync error and oscillator drift.
 
+## Hardware Coexistence & Upstream Inferno Quirks
+
+While i ran Inferno i lost connection to my Apollo E1X device constantly. I believe the following two issues in upstream Inferno are the cause:
+
+1. **mDNS Zero-Length TXT Records:** Upstream `mdns_server.rs` included empty `""` TXT strings in its `_netaudio-cmc` registration. In DNS wire format, this creates `0x00` null bytes that crash strict embedded mDNS parsers.
+2. **Link-Local Multicast Heartbeat (`224.0.0.233:8708`):** Upstream `info_mcast_server.rs` broadcasts a 1-second heartbeat containing unaligned 8-bit peak-meter TLVs (`0x8002`) across the link-local multicast block, which switches flood to all ports and overwhelms embedded hardware.
+
+To remain 100% stable without maintaining a permanent fork of Inferno, the `Dockerfile` applies two lightweight `sed` patches during compilation:
+- Strips the empty TXT records from `mdns_server.rs`.
+- Disables `send_heartbeat` in `info_mcast_server.rs` (port 8708 is unused by Dante Controller and audio routing).
+
 ## Upstream Projects and Dependencies
 
 This project relies on the following open source software:
@@ -283,4 +294,5 @@ This project relies on the following open source software:
 - Inferno (Dante Audio over IP implementation for Linux): https://github.com/teodly/inferno
 - FFmpeg (Audio stream decoding and format conversion): https://ffmpeg.org
 - usrvclock (Userspace Virtual Clock Protocol): https://gitlab.com/lumifaza/usrvclock
+
 
