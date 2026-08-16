@@ -47,6 +47,10 @@ ENV CARGO_PROFILE_RELEASE_STRIP=symbols
 FROM rust-base AS inferno-builder
 ARG TARGETARCH
 
+# Replaces the upstream file wholesale, so it is pinned to the revision it was
+# forked from. Move it into a fork once there is one.
+COPY docker/streamer/patches/info_mcast_server.rs /patches/info_mcast_server.rs
+
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     git clone --depth 1 --recurse-submodules --shallow-submodules -b dev https://github.com/teodly/inferno /build/inferno && \
@@ -57,6 +61,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     MCAST=inferno_aoip/src/device_server/info_mcast_server.rs && \
     grep -q 'add_txt_truncated("")' "$MDNS" && \
     sed -i '/add_txt_truncated("")/d' "$MDNS" && \
+    # Fails the build when upstream touches the file, rather than overwriting
+    # their changes. Rebase patches/info_mcast_server.rs and update the hash.
+    echo "351d7578ad5ce7678e3aec4e57bc76170778f42f25e9a7bfb766da362258b0bf  $MCAST" | sha256sum -c - && \
+    cp /patches/info_mcast_server.rs "$MCAST" && \
     # The heartbeat to 224.0.0.233:8708 degrades and eventually kills an Apollo
     # E1X on the same segment. Device info on 224.0.0.231:8702 is untouched, so
     # Dante Controller still works.
