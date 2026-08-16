@@ -1,8 +1,6 @@
-# Full stack with a Spotify Connect source. Use INSTEAD of compose.yml:
-#
+# Use INSTEAD of compose.yml:
 #   docker compose -f docker/compose.spotify.yml up -d
-#
-# Requires a zone with a matching source block in config.yaml. See the README.
+# Requires a zone with a matching source block in config.yaml.
 
 services:
   dante-streamer:
@@ -13,18 +11,17 @@ services:
     environment:
       - DANTE_INTERFACE=eth1
       - INFERNO_NAME=Dante-Pi
-      # Channels advertised to Dante, 2/4/6/8. Two per zone.
+      # 2/4/6/8, two per zone.
       - DANTE_TX_CHANNELS=8
       - HTTP_PORT=8085
-      # Latency knobs, smallest risk first. Lower means snappier; too low shows
-      # up as [Audio Health] counting holes in the log.
+      # Lower is snappier; too low shows up as [Audio Health] holes in the log.
       - DANTE_SOURCE_PREBUFFER_MS=150
       - DANTE_SOURCE_BUFFER_MS=300
       # - DANTE_ALSA_BUFFER_US=250000   # ALSA playback buffer, all zones
       # - DANTE_FIFO_BYTES=16384        # kernel buffer behind a source FIFO
     cap_add:
-      # SYS_TIME is deliberately absent: the PTP listener serves a clock overlay
-      # rather than touching the system clock.
+      # No SYS_TIME: the PTP listener serves a clock overlay, it does not set the
+      # system clock.
       - NET_ADMIN
       - NET_RAW
       - SYS_NICE
@@ -32,15 +29,14 @@ services:
       rtprio: 95
       memlock: -1
     volumes:
-      # Default is relative to this file, not your shell. Set DANTE_CONFIG when
-      # copying this file elsewhere - a wrong path makes Docker create a
-      # directory rather than fail.
+      # Path is relative to this file, not your shell. A bind source that does
+      # not exist becomes a directory instead of an error, so check typos here.
       - ${DANTE_CONFIG:-./config.yaml}:/opt/dante-player/config.yaml:ro
-      # Soundboard pads. Drop audio files in here and they show up in the UI
-      # without a restart. Remove this line to switch the soundboard off.
+      # Soundboard pads; drop this line to switch the soundboard off.
       - ./sounds:/opt/dante-player/data/sounds
       - dante_state:/root/.local/state/inferno_aoip
       - /dev/shm:/dev/shm
+      # Carries the librespot FIFO between the two containers.
       - dante_pipes:/tmp/dante_player
 
   librespot:
@@ -53,12 +49,11 @@ services:
       - dante-streamer
     volumes:
       - dante_pipes:/tmp/dante_player
-      # raspotify builds librespot with only the Avahi zeroconf backend, so
-      # discovery needs an Avahi daemon over the system D-Bus.
+      # This librespot has only the Avahi zeroconf backend, so discovery needs
+      # the host's Avahi daemon over D-Bus.
       - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
-    # List form, not a folded string: the argv must reach librespot exactly.
-    # Without --device the pipe backend falls back to stdout, which Docker
-    # swallows instantly, so tracks "play" in milliseconds and skip.
+    # List form, not a folded string: argv must reach librespot exactly. Without
+    # --device the pipe backend writes to stdout and tracks skip instantly.
     command:
       - --name
       - Dante-Pi

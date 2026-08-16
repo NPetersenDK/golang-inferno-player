@@ -17,9 +17,8 @@ import (
 	"dante-player/config"
 )
 
-// Sounds are decoded once and kept, so pressing the same pad twice in a row
-// costs nothing and starts instantly. That only holds while they stay short,
-// which SoundboardConfig.MaxSeconds enforces.
+// Decoded sounds are cached forever, which only stays affordable because
+// SoundboardConfig.MaxSeconds caps how long each one can be.
 const (
 	soundboardMaxVoices      = 16
 	soundboardBytesPerSecond = 48000 * 2 * 4
@@ -36,8 +35,7 @@ type Sound struct {
 	DurationMs int    `json:"duration_ms,omitempty"`
 }
 
-// PlayingSound is one pad currently sounding. The same sound may appear several
-// times over, each with its own voice ID and playback position.
+// PlayingSound is one sounding pad; the same sound may appear several times.
 type PlayingSound struct {
 	VoiceID  int    `json:"voice_id"`
 	SoundID  string `json:"sound_id"`
@@ -81,17 +79,14 @@ type Soundboard struct {
 	nextID  int
 	lastErr string
 
-	// The directory listing is rebuilt at most this often. State() runs on every
-	// UI update, which is far too hot to stat the filesystem each time, and a
-	// couple of seconds is not a noticeable delay on a file you just dropped in.
+	// State() runs on every UI update, far too hot to stat the filesystem.
 	listCache []Sound
 	listAt    time.Time
 }
 
 const soundboardListTTL = 2 * time.Second
 
-// NewSoundboard returns nil when the feature is switched off, and every method
-// is nil-safe so callers need no special casing.
+// NewSoundboard returns nil when disabled; every method is nil-safe.
 func NewSoundboard(cfg *config.AppConfig, notify func()) *Soundboard {
 	settings := cfg.SoundboardSettings()
 	if settings == nil {
@@ -110,8 +105,8 @@ func NewSoundboard(cfg *config.AppConfig, notify func()) *Soundboard {
 
 func (s *Soundboard) Enabled() bool { return s != nil }
 
-// List re-reads the directory, so a file dropped in becomes playable without a
-// restart. Results are held briefly, see soundboardListTTL.
+// List re-reads the directory, so a dropped-in file is playable without a
+// restart. Results are cached for soundboardListTTL.
 func (s *Soundboard) List() []Sound {
 	if s == nil {
 		return nil
@@ -168,16 +163,14 @@ func (s *Soundboard) cachedDurationMs(id string) int {
 	return 0
 }
 
-// Play starts another voice for a sound. Triggering the same sound again layers
-// a second copy rather than restarting the first, which is the point of a
-// soundboard.
+// Play layers another voice rather than restarting the sound.
 func (s *Soundboard) Play(soundID string, zoneID int) (int, error) {
 	if s == nil {
 		return 0, fmt.Errorf("soundboard is disabled")
 	}
 
-	// Only sounds the directory scan turned up are playable, which keeps a
-	// crafted ID from reaching a file outside the directory.
+	// Only names the scan turned up are playable, so a crafted ID cannot reach
+	// a file outside the directory.
 	var match *Sound
 	for _, snd := range s.List() {
 		if snd.ID == soundID {
@@ -261,15 +254,9 @@ func (s *Soundboard) StopAll(zoneID int) {
 	}
 }
 
-// MixInto adds every voice belonging to a zone on top of what the zone is
-// already playing, and drops voices that have run out. gain carries the zone's
-// volume and mute, so muting a zone silences its pads too.
-//
-// Returns the peak level of what it added, 0 to 1 per channel, so the zone's
-// meters can show a pad firing over a silent zone.
-//
-// Called from the Dante audio loop 50 times a second, so it does no allocation
-// beyond a scratch buffer that it keeps.
+// MixInto adds a zone's voices on top of what is already in master and returns
+// the peak of what it added, 0 to 1 per channel. Runs 50 times a second on the
+// Dante loop, so it allocates nothing beyond the scratch buffer it keeps.
 func (s *Soundboard) MixInto(zoneID int, master []byte, chL, chR, numChannels, frames int, gain float64) (peakL, peakR float64) {
 	if s == nil {
 		return 0, 0
@@ -306,7 +293,6 @@ func (s *Soundboard) MixInto(zoneID int, master []byte, chL, chR, numChannels, f
 		return 0, 0
 	}
 
-	// Retire anything that reached its end.
 	kept := s.voices[:0]
 	finished := false
 	for _, v := range s.voices {
@@ -352,8 +338,7 @@ func addSample(buf []byte, offset int, delta int32) {
 	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(saturateAdd(current, delta)))
 }
 
-// saturateAdd clips rather than wrapping, so a loud pad over loud music
-// distorts at the ceiling instead of tearing through zero.
+// saturateAdd clips instead of wrapping, which would tear through zero.
 func saturateAdd(a, b int32) int32 {
 	sum := int64(a) + int64(b)
 	if sum > math.MaxInt32 {
@@ -365,14 +350,12 @@ func saturateAdd(a, b int32) int32 {
 	return int32(sum)
 }
 
-// ZoneSounds is what one zone currently has sounding, for the zone list.
 type ZoneSounds struct {
 	Count int
 	Label string
 }
 
-// ZoneSummary describes each zone's pads as a line of text, collapsing repeats
-// of the same sound into "Airhorn x3" rather than listing it three times.
+// ZoneSummary labels each zone's pads, collapsing repeats into "Airhorn x3".
 func (s *Soundboard) ZoneSummary() map[int]ZoneSounds {
 	if s == nil {
 		return nil
@@ -384,8 +367,7 @@ func (s *Soundboard) ZoneSummary() map[int]ZoneSounds {
 		return nil
 	}
 
-	// Order of first appearance, so the label does not reshuffle itself between
-	// updates.
+	// First-appearance order, or the label reshuffles between updates.
 	order := make(map[int][]string)
 	counts := make(map[int]map[string]int)
 	total := make(map[int]int)
@@ -447,8 +429,7 @@ func (s *Soundboard) State() SoundboardState {
 	}
 }
 
-// load returns the decoded sound, decoding it the first time and whenever the
-// file on disk has changed underneath us.
+// load decodes on first use and whenever the file changed underneath us.
 func (s *Soundboard) load(id string) ([]int32, error) {
 	path := filepath.Join(s.cfg.Path, id)
 	info, err := os.Stat(path)
@@ -477,8 +458,7 @@ func (s *Soundboard) load(id string) ([]int32, error) {
 	return samples, nil
 }
 
-// decode runs the file through FFmpeg onto the Dante rate and layout, and
-// refuses anything longer than the configured cap.
+// decode resamples the file onto the Dante rate and layout via FFmpeg.
 func (s *Soundboard) decode(path string) ([]int32, error) {
 	limit := s.cfg.MaxSeconds * soundboardBytesPerSecond
 
@@ -506,8 +486,7 @@ func (s *Soundboard) decode(path string) ([]int32, error) {
 		_ = cmd.Wait()
 	}()
 
-	// One byte past the limit is enough to tell "too long" from "exactly at the
-	// cap", and bounds what a huge file can do to memory.
+	// One byte past the limit separates "too long" from "exactly at the cap".
 	raw, err := io.ReadAll(io.LimitReader(stdout, int64(limit)+1))
 	if err != nil {
 		return nil, fmt.Errorf("decode %s: %w", filepath.Base(path), err)

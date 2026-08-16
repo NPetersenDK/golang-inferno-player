@@ -56,7 +56,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/soundboard/", s.handleSoundboardAction)
 	s.mux.HandleFunc("/api/events", s.handleSSE)
 
-	// Web UI static files
 	if s.webFS != nil {
 		fileServer := http.FileServer(http.FS(s.webFS))
 		s.mux.Handle("/", fileServer)
@@ -64,7 +63,6 @@ func (s *Server) routes() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// CORS headers for development/remote controllers
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -134,11 +132,6 @@ func (s *Server) handlePresetItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleZoneAction(w http.ResponseWriter, r *http.Request) {
-	// Paths:
-	// /api/zones/{id}/play
-	// /api/zones/{id}/stop
-	// /api/zones/{id}/volume
-	// /api/zones/{id}/mute
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if len(parts) < 4 {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
@@ -278,8 +271,7 @@ type SoundRequest struct {
 	VoiceID int    `json:"voice_id,omitempty"`
 }
 
-// The sound list and what is currently playing also ride along in /api/status;
-// this endpoint exists so a controller can poll the soundboard on its own.
+// Soundboard state also rides along in /api/status; this lets a controller poll it alone.
 func (s *Server) handleSoundboard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

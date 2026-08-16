@@ -1,5 +1,5 @@
+# Run from the repository root:
 #   docker compose -f docker/compose.yml up -d
-#
 # For a Spotify Connect source, use compose.spotify.yml instead.
 
 services:
@@ -10,36 +10,32 @@ services:
     # Host network for the Dante NIC, multicast and PTP.
     network_mode: host
     environment:
-      # Interface dedicated to Dante (eth1, usb0, enx..., end0, ...)
+      # The NIC dedicated to Dante (eth1, usb0, enx..., end0, ...)
       - DANTE_INTERFACE=eth1
       - INFERNO_NAME=Dante-Pi
-      # Channels advertised to Dante, 2/4/6/8. Two per zone.
+      # 2/4/6/8, two per zone.
       - DANTE_TX_CHANNELS=8
       - HTTP_PORT=8085
     cap_add:
-      # SYS_TIME is deliberately absent: the PTP listener serves a clock overlay
-      # rather than touching the system clock.
+      # No SYS_TIME: the PTP listener serves a clock overlay, it does not set the
+      # system clock.
       - NET_ADMIN
       - NET_RAW
       - SYS_NICE
     ulimits:
       rtprio: 95
       memlock: -1
-    # Uncomment both to use an RTL-SDR as a source. See the README.
-    # Grant only the bus the dongle is on - find it with lsusb - rather than
-    # the whole USB tree. Note this is resolved at container start, so a
-    # replugged dongle needs a restart.
+    # Uncomment both for an RTL-SDR source. Grant only the dongle's bus (lsusb),
+    # resolved at container start, so a replugged dongle needs a restart.
     # environment:
     #   - DANTE_TUNER_ENABLED=1
     # devices:
     #   - /dev/bus/usb/001:/dev/bus/usb/001
     volumes:
-      # Default is relative to this file, not your shell. Set DANTE_CONFIG when
-      # copying this file elsewhere - a wrong path makes Docker create a
-      # directory rather than fail.
+      # Path is relative to this file, not your shell. A bind source that does
+      # not exist becomes a directory instead of an error, so check typos here.
       - ${DANTE_CONFIG:-./config.yaml}:/opt/dante-player/config.yaml:ro
-      # Soundboard pads. Drop audio files in here and they show up in the UI
-      # without a restart. Remove this line to switch the soundboard off.
+      # Soundboard pads; drop this line to switch the soundboard off.
       - ./sounds:/opt/dante-player/data/sounds
       # Keeps Dante Controller routing across restarts.
       - dante_state:/root/.local/state/inferno_aoip

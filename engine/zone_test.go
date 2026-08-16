@@ -52,9 +52,8 @@ func TestZoneWaitsForPrebuffer(t *testing.T) {
 	}
 }
 
-// Re-priming on every dip is what made the zone flap between playing and
-// buffering: the queue level drifts freely, so brief shortfalls are normal and
-// must cost one 20 ms hole rather than a second of silence.
+// The queue level drifts freely, so a brief shortfall must cost one 20 ms hole
+// rather than a re-prime's second of silence.
 func TestZoneRidesOutBriefShortfall(t *testing.T) {
 	z := newTestZone()
 	pushChunks(z, zonePrebufferChunks)
@@ -70,7 +69,6 @@ func TestZoneRidesOutBriefShortfall(t *testing.T) {
 		t.Errorf("status %q after one empty pull, want %q", got, StatusPlaying)
 	}
 
-	// One chunk arriving is enough to carry on, because we never left playing.
 	pushChunks(z, 1)
 	if _, ok := z.PullSamples(960); !ok {
 		t.Fatal("zone did not resume after the queue refilled")
@@ -108,8 +106,7 @@ func drainZone(t *testing.T, z *ZonePlayer, chunks int) {
 	}
 }
 
-// A source zone belongs to its producer: the station browser must not be able
-// to take it over, and Stop All must not silence it.
+// A source zone belongs to its producer, not to the station browser.
 func TestSourceZoneRejectsStationControl(t *testing.T) {
 	z := NewZonePlayer(config.ZoneConfig{
 		ID:     4,
@@ -135,8 +132,7 @@ func TestSourceZoneRejectsStationControl(t *testing.T) {
 	}
 }
 
-// prebuffer_ms is what keeps an interactive source responsive, so it has to
-// actually reach the pull path.
+// prebuffer_ms sets an interactive source's latency, so it must reach the pull path.
 func TestSourcePrebufferOverride(t *testing.T) {
 	z := NewZonePlayer(config.ZoneConfig{
 		ID:     4,
@@ -158,8 +154,7 @@ func TestSourcePrebufferOverride(t *testing.T) {
 	}
 }
 
-// buffer_ms is what sets the latency you hear: a blocked producer keeps the
-// queue full, so the cap is the steady state, not the prebuffer.
+// A blocked producer keeps the queue full, so buffer_ms is the latency you hear.
 func TestSourceBufferCapsTheQueue(t *testing.T) {
 	z := NewZonePlayer(config.ZoneConfig{
 		ID: 4,
@@ -193,9 +188,7 @@ func TestZoneWithoutSourceIsUnchanged(t *testing.T) {
 	}
 }
 
-// A source zone is permanently attached to its producer, so a quiet producer
-// means idle. Reporting "buffering" there would claim it is working towards
-// playback when nothing is coming.
+// A quiet producer is idle: "buffering" would claim something is coming.
 func TestSourceZoneIsIdleWhenProducerIsQuiet(t *testing.T) {
 	z := newTestSourceZone(0)
 	pushChunks(z, z.prebufferChunks)
@@ -220,7 +213,6 @@ func TestSourceZoneIsIdleWhenProducerIsQuiet(t *testing.T) {
 	}
 }
 
-// Partial data means it really is buffering, for either kind of zone.
 func TestSourceZoneBuffersWhileFilling(t *testing.T) {
 	z := newTestSourceZone(0)
 	pushChunks(z, 1)
@@ -233,8 +225,7 @@ func TestSourceZoneBuffersWhileFilling(t *testing.T) {
 	}
 }
 
-// Backpressure is the only thing pacing a pipe producer. Without it the
-// producer runs at whatever speed we can drain, which is not realtime.
+// Backpressure is the only thing pacing a pipe producer.
 func TestEnqueueBlocksWhenBackpressureRequested(t *testing.T) {
 	z := newTestZone()
 	pushChunks(z, zoneQueueChunks) // queue full
@@ -249,7 +240,6 @@ func TestEnqueueBlocksWhenBackpressureRequested(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	// Draining one chunk must let it through.
 	<-z.audioChan
 	select {
 	case err := <-done:
@@ -283,9 +273,8 @@ func TestEnqueueDropsOldestWithoutBackpressure(t *testing.T) {
 	}
 }
 
-// Inferno republishes FreqScale as a frequency offset in a heartbeat that
-// reaches every device on the segment, and ours is orders of magnitude larger
-// than a slaved device's because we never discipline anything.
+// Inferno republishes FreqScale in a heartbeat that reaches every device on the
+// segment, and ours is huge because we never discipline anything.
 func TestFreqScaleIsWithheldByDefault(t *testing.T) {
 	d := &ClockDiscipline{shiftNs: -1_785_713_638_806_000_000, freqScale: -83.13e-6}
 
@@ -303,8 +292,6 @@ func TestFreqScaleIsWithheldByDefault(t *testing.T) {
 	}
 }
 
-// Every tuner method has to be safe on a nil receiver, since that is what an
-// unconfigured tuner is.
 func TestNilTunerIsInert(t *testing.T) {
 	var tuner *Tuner
 
@@ -320,8 +307,7 @@ func TestNilTunerIsInert(t *testing.T) {
 	tuner.Off() // must not panic
 }
 
-// rtl_fm's -d takes an index or a serial, so the setting is a string and an
-// empty one must still select the first device rather than passing "".
+// rtl_fm's -d takes an index or a serial, so an empty setting must resolve to 0.
 func TestTunerDeviceArg(t *testing.T) {
 	if got := (&Tuner{}).deviceArg(); got != "0" {
 		t.Errorf("unset device gave %q, want %q", got, "0")
@@ -342,9 +328,8 @@ func TestTuneFrequencyRejectsOutOfRange(t *testing.T) {
 	}
 }
 
-// rtl_fm's -g takes a number, so a word parses as 0 dB - the lowest gain the
-// hardware has, which sounds exactly like no signal. Automatic gain is reached
-// by omitting the flag.
+// rtl_fm's -g takes a number, so a word parses as 0 dB, which sounds like no
+// signal. Automatic gain means omitting the flag.
 func TestAutoGainOmitsTheFlag(t *testing.T) {
 	for _, gain := range []string{"", "auto", "AUTO"} {
 		tuner := &Tuner{cfg: config.TunerConfig{Gain: gain}}
@@ -358,8 +343,7 @@ func TestAutoGainOmitsTheFlag(t *testing.T) {
 	}
 }
 
-// Which rate rtl_fm settles on varies by build, so the mismatch has to be
-// caught from its own output rather than assumed.
+// Which rate rtl_fm settles on varies by build, so it must be read from its output.
 func TestOutputRateMismatchIsDetected(t *testing.T) {
 	var lines []string
 	tuner := &Tuner{zoneID: 3, zoneRate: 32000}
@@ -375,8 +359,7 @@ func TestOutputRateMismatchIsDetected(t *testing.T) {
 		t.Errorf("forwarded %d lines, want 2", len(lines))
 	}
 
-	// Matching rates must stay quiet; only the parse is asserted here, since
-	// the warning itself goes to the log.
+	// Only the parse is asserted; the warning itself goes to the log.
 	if m := rtlOutputRate.FindStringSubmatch("Output at 170000 Hz."); m == nil || m[1] != "170000" {
 		t.Errorf("failed to read the rate out of rtl_fm's line: %v", m)
 	}
@@ -385,8 +368,7 @@ func TestOutputRateMismatchIsDetected(t *testing.T) {
 	}
 }
 
-// Writing megahertz into a hertz field is the easy mistake, and a preset must
-// be checked as strictly as a typed-in frequency.
+// FrequencyHz is hertz, and megahertz in that field is the easy mistake.
 func TestPresetFrequencyIsValidated(t *testing.T) {
 	tuner := &Tuner{cfg: config.TunerConfig{
 		Presets: []config.TunerPreset{{ID: "p4", Name: "P4", FrequencyHz: 964_000}},

@@ -27,23 +27,34 @@ const (
 	StatusError     PlaybackStatus = "error"
 )
 
-// Buffering geometry, in 20 ms chunks.
-//
-// A source and the mixer run on unrelated oscillators, so the queue level is a
-// random walk with no restoring force. Headroom has to exceed the jitter of the
-// source, which for an internet stream means seconds, not milliseconds.
+// Buffering geometry, in 20 ms chunks. Source and mixer run on unrelated
+// oscillators, so headroom must exceed the source's jitter: seconds, not ms.
 const (
-	zoneQueueChunks     = 150 // 3 s, caps latency and drops the oldest when full
-	zonePrebufferChunks = 50  // 1 s of slack in either direction
+	zoneQueueChunks     = 150 // 3 s
+	zonePrebufferChunks = 50  // 1 s
 	zoneChunkMillis     = 20
 
-	// How long the queue must stay empty to count as stalled rather than
-	// momentarily short. Re-priming costs a whole prebuffer of silence.
+	// Empty for this long counts as stalled; re-priming costs a whole
+	// prebuffer of silence, so a shorter gap must be ridden out.
 	zoneStallChunks = 50 // 1 s
 
-	// Default kernel buffer behind a source FIFO, down from the 64 KiB the
-	// kernel would otherwise use. Override with DANTE_FIFO_BYTES.
+	// Kernel FIFO buffer, down from 64 KiB. Override with DANTE_FIFO_BYTES.
 	defaultFIFOBytes = 16 << 10 // ~90 ms at CD rate stereo
+
+	// Headroom between prebuffer and cap. Warned about, not enforced.
+	minZoneHeadroomMs = 250
+)
+
+const (
+	// FFmpeg's own -reconnect flags do not cover a server that accepts the
+	// socket and then says nothing, and it will sit on that forever.
+	streamReadTimeout = 20 * time.Second
+
+	streamRetryMin = 2 * time.Second
+	streamRetryMax = 30 * time.Second
+
+	// Ran this long, so the next failure restarts backoff from the minimum.
+	streamHealthyRun = time.Minute
 )
 
 type ZoneState struct {
@@ -82,14 +93,11 @@ type ZonePlayer struct {
 	peakL atomic.Uint64 // float64 bits
 	peakR atomic.Uint64 // float64 bits
 
-	// primed is false until the queue has built up zonePrebufferChunks, and
-	// goes false again only after the queue has stayed empty for zoneStallChunks.
 	primed      bool
 	emptyPulls  atomic.Int64
 	starvations atomic.Uint64
 
-	// Both are per zone: a local producer feeding a FIFO is far steadier than an
-	// internet stream and can run much shorter.
+	// Per zone: a FIFO producer is steadier than a stream and can run shorter.
 	prebufferChunks int
 	queueChunks     int
 
@@ -108,6 +116,13 @@ func NewZonePlayer(cfg config.ZoneConfig, stateChan chan struct{}) *ZonePlayer {
 		if src.BufferMs > 0 {
 			queue = clampChunks(src.BufferMs, prebuffer+1, zoneQueueChunks)
 		}
+	}
+
+	// Backpressure keeps a pipe producer's queue full, so the gap between the
+	// two is all the slack there is: pause longer and the zone drops out.
+	if cfg.Source != nil && (queue-prebuffer)*zoneChunkMillis < minZoneHeadroomMs {
+		log.Printf("[Zone %d] buffer_ms leaves only %d ms above prebuffer_ms; a producer pausing longer than that will drop out mid-track",
+			cfg.ID, (queue-prebuffer)*zoneChunkMillis)
 	}
 
 	z := &ZonePlayer{
@@ -136,8 +151,6 @@ func clampChunks(millis, min, max int) int {
 	return chunks
 }
 
-// IsSource reports whether this zone is permanently fed by an external
-// producer rather than being a station browser slot.
 func (z *ZonePlayer) IsSource() bool {
 	return z.cfg.Source != nil
 }
@@ -195,8 +208,7 @@ func (z *ZonePlayer) ToggleMute() bool {
 }
 
 func (z *ZonePlayer) Stop() {
-	// A source zone is a permanent feed from an external producer, not
-	// something the station browser owns. Stop All must leave it alone.
+	// Stop All must leave a producer's feed alone.
 	if z.IsSource() {
 		return
 	}
@@ -215,7 +227,6 @@ func (z *ZonePlayer) Stop() {
 	z.primed = false
 	z.mu.Unlock()
 
-	// Drain any pending audio frames
 	for len(z.audioChan) > 0 {
 		<-z.audioChan
 	}
@@ -225,8 +236,7 @@ func (z *ZonePlayer) Stop() {
 	z.notifyState()
 }
 
-// StartSource attaches the zone to its configured producer for good. It is a
-// no-op for zones without a source, so callers need no special casing.
+// StartSource attaches the zone to its producer for good; a no-op without one.
 func (z *ZonePlayer) StartSource() error {
 	if !z.IsSource() {
 		return nil
@@ -247,7 +257,6 @@ func (z *ZonePlayer) StartSource() error {
 	z.mu.Lock()
 	ctx, cancel := context.WithCancel(context.Background())
 	z.cancelFunc = cancel
-	// Idle until the producer actually sends something.
 	z.status = StatusIdle
 	z.stationID = "source"
 	z.stationName = src.Label
@@ -266,13 +275,8 @@ func (z *ZonePlayer) StartSource() error {
 	return nil
 }
 
-// sourceLoop keeps a decoder attached to the FIFO, with FFmpeg resampling the
-// producer's rate onto the Dante clock.
-//
-// A pausable producer is read with backpressure, which is what paces it: a full
-// queue blocks the reader, FFmpeg's pipe fills, and the producer's write blocks.
-// Drain the FIFO as fast as it is written and it has no clock at all. A
-// realtime producer is the opposite and must never be blocked.
+// sourceLoop keeps a decoder attached to the FIFO. Backpressure is what paces a
+// pausable producer; a realtime one must never be blocked.
 func (z *ZonePlayer) sourceLoop(ctx context.Context, src config.ZoneSource) {
 	args := []string{
 		"-hide_banner",
@@ -296,7 +300,8 @@ func (z *ZonePlayer) sourceLoop(ctx context.Context, src config.ZoneSource) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := z.decodeInto(ctx, args, !src.Realtime); err != nil && ctx.Err() == nil {
+		// No idle timeout: a pipe producer is entitled to be quiet.
+		if err := z.decodeInto(ctx, args, !src.Realtime, 0); err != nil && ctx.Err() == nil {
 			log.Printf("[Zone %d] Source decoder stopped: %v, restarting", z.cfg.ID, err)
 		}
 		select {
@@ -348,10 +353,10 @@ func (z *ZonePlayer) Play(preset *config.StationPreset, customURL string, custom
 	return nil
 }
 
+// streamLoop treats every way a stream can end as temporary, with backoff.
 func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 	log.Printf("[Zone %d] Decoding stream for %s (%s)", z.cfg.ID, z.stationName, streamURL)
 
-	// Launch FFmpeg to decode audio into 48kHz 32-bit stereo PCM
 	ffmpegArgs := []string{
 		"-hide_banner",
 		"-loglevel", "error",
@@ -367,36 +372,52 @@ func (z *ZonePlayer) streamLoop(ctx context.Context, streamURL string) {
 		"-",
 	}
 
-	// Status stays Buffering until PullSamples has built the prebuffer, so the
-	// UI reflects when a zone is actually feeding the mixer. This also covers
-	// the reconnect path, where the zone was Playing a moment ago.
-	z.mu.Lock()
-	z.status = StatusBuffering
-	z.primed = false
-	z.mu.Unlock()
-	z.emptyPulls.Store(0)
-	z.notifyState()
-
-	err := z.decodeInto(ctx, ffmpegArgs, false)
-	if ctx.Err() != nil {
-		return
-	}
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-		log.Printf("[Zone %d] Stream EOF, reconnecting in 2s...", z.cfg.ID)
-		time.Sleep(2 * time.Second)
-		if ctx.Err() == nil {
-			go z.streamLoop(ctx, streamURL)
+	retry := streamRetryMin
+	for {
+		if ctx.Err() != nil {
+			return
 		}
-		return
+
+		z.mu.Lock()
+		z.status = StatusBuffering
+		z.primed = false
+		z.mu.Unlock()
+		z.emptyPulls.Store(0)
+		z.notifyState()
+
+		started := time.Now()
+		err := z.decodeInto(ctx, ffmpegArgs, false, streamReadTimeout)
+		if ctx.Err() != nil {
+			return
+		}
+
+		if time.Since(started) >= streamHealthyRun {
+			retry = streamRetryMin
+		}
+
+		switch {
+		case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+			log.Printf("[Zone %d] Stream ended, reconnecting in %s", z.cfg.ID, retry)
+		default:
+			log.Printf("[Zone %d] Stream failed (%v), reconnecting in %s", z.cfg.ID, err, retry)
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(retry):
+		}
+
+		if retry *= 2; retry > streamRetryMax {
+			retry = streamRetryMax
+		}
 	}
-	z.setError(fmt.Sprintf("Stream read error: %v", err))
 }
 
-// decodeInto runs FFmpeg with the given arguments and pumps its raw 48 kHz
-// stereo output into the zone queue until it exits or the context is cancelled.
-// Both the station path and the source path share it; backpressure is what
-// distinguishes them, see enqueue.
-func (z *ZonePlayer) decodeInto(ctx context.Context, args []string, backpressure bool) error {
+// decodeInto pumps FFmpeg's 48 kHz stereo output into the zone queue. A nonzero
+// idleTimeout kills it after that long without audio; only network streams want
+// that, since a pipe producer going quiet is normal.
+func (z *ZonePlayer) decodeInto(ctx context.Context, args []string, backpressure bool, idleTimeout time.Duration) error {
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -412,8 +433,15 @@ func (z *ZonePlayer) decodeInto(ctx context.Context, args []string, backpressure
 		_ = cmd.Wait()
 	}()
 
-	// Chunk size: 960 frames (20ms at 48kHz) * 2 channels * 4 bytes = 7680 bytes
-	rawBuf := make([]byte, 7680)
+	var lastRead atomic.Int64
+	lastRead.Store(time.Now().UnixNano())
+	if idleTimeout > 0 {
+		stop := make(chan struct{})
+		defer close(stop)
+		go z.watchDecoder(cmd, &lastRead, idleTimeout, stop)
+	}
+
+	rawBuf := make([]byte, 7680) // 960 frames (20 ms) * 2 ch * 4 bytes
 
 	for {
 		if ctx.Err() != nil {
@@ -427,6 +455,7 @@ func (z *ZonePlayer) decodeInto(ctx context.Context, args []string, backpressure
 		if n <= 0 {
 			continue
 		}
+		lastRead.Store(time.Now().UnixNano())
 
 		numSamples := n / 4
 		samples := make([]int32, numSamples)
@@ -440,11 +469,31 @@ func (z *ZonePlayer) decodeInto(ctx context.Context, args []string, backpressure
 	}
 }
 
-// enqueue hands one chunk to the mixer.
-//
-// A station stream is paced by the network and cannot be told to wait, so a
-// full queue drops the oldest chunk. A pipe producer is the opposite: it writes
-// as fast as we drain, so it has to be blocked or it has no clock at all.
+// watchDecoder kills FFmpeg when it stops producing audio: a stalled connection
+// never closes the pipe, so killing it is what turns the hang into a read error.
+func (z *ZonePlayer) watchDecoder(cmd *exec.Cmd, lastRead *atomic.Int64, timeout time.Duration, stop <-chan struct{}) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if time.Since(time.Unix(0, lastRead.Load())) < timeout {
+				continue
+			}
+			log.Printf("[Zone %d] No audio from the decoder for %s, restarting it", z.cfg.ID, timeout)
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			return
+		}
+	}
+}
+
+// enqueue drops the oldest chunk for a network stream, which cannot be told to
+// wait, but blocks a pipe producer, which otherwise has no clock at all.
 func (z *ZonePlayer) enqueue(ctx context.Context, samples []int32, backpressure bool) error {
 	if backpressure {
 		select {
@@ -460,8 +509,6 @@ func (z *ZonePlayer) enqueue(ctx context.Context, samples []int32, backpressure 
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		// Queue full: drop the oldest chunk, which bounds added latency when
-		// the source outruns the Dante clock.
 		select {
 		case <-z.audioChan:
 		default:
@@ -471,9 +518,8 @@ func (z *ZonePlayer) enqueue(ctx context.Context, samples []int32, backpressure 
 	return nil
 }
 
-// PullSamples pulls up to numFrames stereo samples (numFrames * 2 int32s),
-// applies volume and updates peaks. Delivers nothing until the queue holds
-// prebufferChunks.
+// PullSamples returns interleaved stereo with volume applied, and nothing at
+// all until the prebuffer is full.
 func (z *ZonePlayer) PullSamples(numFrames int) ([]int32, bool) {
 	z.mu.RLock()
 	vol := z.volume
@@ -482,8 +528,7 @@ func (z *ZonePlayer) PullSamples(numFrames int) ([]int32, bool) {
 	primed := z.primed
 	z.mu.RUnlock()
 
-	// A source zone is permanently attached to its producer, so it keeps pulling
-	// even while idle. A station zone only pulls once someone pressed play.
+	// A source zone keeps pulling while idle, or it could never come back.
 	if !z.IsSource() && status != StatusPlaying && status != StatusBuffering {
 		z.setPeakL(0)
 		z.setPeakR(0)
@@ -492,9 +537,7 @@ func (z *ZonePlayer) PullSamples(numFrames int) ([]int32, bool) {
 
 	if !primed {
 		if queued := len(z.audioChan); queued < z.prebufferChunks {
-			// Something is arriving, we are just short: that is buffering. An
-			// empty queue is handled by the stall path below, which for a
-			// source zone reports idle rather than buffering.
+			// Short but arriving is buffering; empty is left to the stall path.
 			if queued > 0 {
 				z.setStatus(StatusBuffering)
 			}
@@ -509,9 +552,8 @@ func (z *ZonePlayer) PullSamples(numFrames int) ([]int32, bool) {
 	case samples = <-z.audioChan:
 		z.emptyPulls.Store(0)
 	default:
-		// A momentary shortfall costs one 20 ms hole. Re-priming here would
-		// cost a whole prebuffer of silence, repeatedly, since the queue level
-		// drifts freely. Only a sustained gap means the source stalled.
+		// A momentary shortfall costs one 20 ms hole. Re-priming here would cost
+		// a whole prebuffer of silence, repeatedly, since the level drifts freely.
 		z.starvations.Add(1)
 		if z.emptyPulls.Add(1) >= zoneStallChunks {
 			z.setPrimed(false)
@@ -552,9 +594,7 @@ func (z *ZonePlayer) PullSamples(numFrames int) ([]int32, bool) {
 	return samples, true
 }
 
-// BumpPeaks raises the meters to take account of audio mixed on top of the
-// zone. PullSamples only sees the zone's own stream, so without this a
-// soundboard pad over a silent zone would not move the meters at all.
+// BumpPeaks raises the meters (0 to 1) for audio PullSamples never sees.
 func (z *ZonePlayer) BumpPeaks(l, r float64) {
 	if l > z.getPeakL() {
 		z.setPeakL(l)
@@ -564,8 +604,7 @@ func (z *ZonePlayer) BumpPeaks(l, r float64) {
 	}
 }
 
-// GainFactor is the zone's volume as a multiplier, zero while muted. Anything
-// mixed on top of the zone applies it too, so muting a zone silences all of it.
+// GainFactor is the zone's volume as a multiplier, zero while muted.
 func (z *ZonePlayer) GainFactor() float64 {
 	z.mu.RLock()
 	defer z.mu.RUnlock()
@@ -575,8 +614,7 @@ func (z *ZonePlayer) GainFactor() float64 {
 	return float64(z.volume) / 100.0
 }
 
-// StarvationCount is the number of times the queue ran dry since start, i.e.
-// how many 20 ms holes were mixed into the Dante stream.
+// StarvationCount is how many 20 ms holes went into the Dante stream.
 func (z *ZonePlayer) StarvationCount() uint64 {
 	return z.starvations.Load()
 }
@@ -596,8 +634,7 @@ func (z *ZonePlayer) setPrimed(primed bool) {
 	case primed:
 		z.setStatus(StatusPlaying)
 	case z.IsSource():
-		// The producer went quiet. A source zone has nothing queued and nothing
-		// on the way, which is idle - it is not working towards playback.
+		// A quiet producer is idle, not working towards playback.
 		z.setStatus(StatusIdle)
 	default:
 		z.setStatus(StatusBuffering)

@@ -50,19 +50,14 @@ func main() {
 		cfg.DanteName = *danteName
 	}
 
-	// Prepare static web assets sub filesystem
 	strippedWebFS, err := fs.Sub(webFS, "web")
 	if err != nil {
 		log.Fatalf("Failed to initialize web filesystem: %v", err)
 	}
 
-	// Initialize Playback Engine
 	mgr := engine.NewPlaybackManager(cfg)
-
-	// Initialize REST/SSE API Server
 	server := api.NewServer(cfg, mgr, strippedWebFS)
 
-	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 

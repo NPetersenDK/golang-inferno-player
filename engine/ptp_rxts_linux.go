@@ -9,10 +9,9 @@ import (
 	"unsafe"
 )
 
-// enableRxTimestamps asks the kernel to attach a CLOCK_REALTIME receive
-// timestamp to every datagram. Taking the arrival time in the softirq path
-// instead of after the Go scheduler wakes us removes the largest error source
-// in the offset measurement.
+// enableRxTimestamps asks the kernel for a CLOCK_REALTIME receive timestamp per
+// datagram: stamping in the softirq path rather than after the Go scheduler wakes
+// us removes the largest error source in the offset measurement.
 func enableRxTimestamps(c *net.UDPConn) bool {
 	rc, err := c.SyscallConn()
 	if err != nil {
@@ -41,8 +40,7 @@ func readPacketWithTimestamp(c *net.UDPConn, buf, oob []byte) (n int, rxNs int64
 		return n, rxNs, nil
 	}
 	for _, msg := range msgs {
-		// SCM_TIMESTAMPNS has the same numeric value as SO_TIMESTAMPNS, which
-		// is the one the syscall package exposes.
+		// SCM_TIMESTAMPNS is numerically SO_TIMESTAMPNS, the one syscall exposes.
 		if msg.Header.Level != syscall.SOL_SOCKET || msg.Header.Type != syscall.SO_TIMESTAMPNS {
 			continue
 		}

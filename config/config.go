@@ -13,35 +13,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ZoneSource turns a zone into a permanent feed from an external producer
-// instead of a station browser slot. What writes to the FIFO is outside this
-// project. Leave it unset and the zone behaves exactly as before.
+// ZoneSource turns a zone into a permanent feed from an external producer instead of a station slot.
 type ZoneSource struct {
-	// Type selects the mechanism. Only "pipe" exists today.
 	Type string `json:"type" yaml:"type"`
-	// Path is the FIFO to read. Created at startup if missing.
-	Path string `json:"path" yaml:"path"`
-	// Label is what the UI shows for this zone.
+	// FIFO to read; created at startup if missing.
+	Path  string `json:"path" yaml:"path"`
 	Label string `json:"label,omitempty" yaml:"label,omitempty"`
 
-	// Raw PCM layout the producer writes. Defaults are CD rate stereo.
+	// Raw PCM the producer writes; defaults to s16le 44100 Hz stereo.
 	Format     string `json:"format,omitempty" yaml:"format,omitempty"`
 	SampleRate int    `json:"sample_rate,omitempty" yaml:"sample_rate,omitempty"`
 	Channels   int    `json:"channels,omitempty" yaml:"channels,omitempty"`
 
-	// Realtime marks a producer that cannot be paused. A radio or a capture
-	// device keeps sampling whether we read or not, so blocking it overruns its
-	// own buffer; a full queue must drop the oldest chunk instead, as for a
-	// network stream. Leave false for anything that can be held back.
+	// A realtime producer cannot be paused: blocking it overruns its own buffer,
+	// so a full queue drops the oldest chunk instead.
 	Realtime bool `json:"realtime,omitempty" yaml:"realtime,omitempty"`
 
-	// PrebufferMs is how much audio must be queued before the zone starts
-	// delivering.
+	// Milliseconds queued before the zone starts delivering.
 	PrebufferMs int `json:"prebuffer_ms,omitempty" yaml:"prebuffer_ms,omitempty"`
 
-	// BufferMs caps the queue and sets the latency. Backpressure keeps a pipe
-	// producer's queue full, so the cap is the steady state, not the prebuffer.
-	// Defaults to twice PrebufferMs.
+	// Queue cap in ms, and so the steady-state latency: backpressure keeps a pipe
+	// producer's queue full. Defaults to twice PrebufferMs.
 	BufferMs int `json:"buffer_ms,omitempty" yaml:"buffer_ms,omitempty"`
 }
 
@@ -66,43 +58,31 @@ type StationPreset struct {
 	IsCustom    bool   `json:"is_custom,omitempty" yaml:"is_custom,omitempty"`
 }
 
-// TunerPreset is one tunable station.
 type TunerPreset struct {
 	ID          string `json:"id" yaml:"id"`
 	Name        string `json:"name" yaml:"name"`
 	FrequencyHz int64  `json:"frequency_hz" yaml:"frequency_hz"`
 }
 
-// TunerConfig drives an SDR feeding one source zone. Disabled by default: with
-// Enabled false nothing starts, no API is served and the UI shows nothing, so
-// the feature does not exist for anyone who has not asked for it.
+// TunerConfig drives an SDR feeding one source zone. Off unless asked for.
 type TunerConfig struct {
 	Enabled bool `json:"enabled" yaml:"enabled"`
-	// ZoneID must name a zone whose source is a realtime pipe. The tuner writes
-	// to that source's path, so the two share one definition of where audio
-	// goes.
+	// Must name a zone whose source is a realtime pipe; the tuner writes to that source's path.
 	ZoneID int `json:"zone_id" yaml:"zone_id"`
-	// Device is passed to rtl_fm's -d. It takes an index or a serial number,
-	// matched exactly or by prefix or suffix. Prefer the serial: indices shift
-	// when USB devices come and go. Defaults to "0".
+	// rtl_fm -d: index or serial. Prefer the serial, indices shift as USB devices come and go.
 	Device string `json:"device,omitempty" yaml:"device,omitempty"`
 	Gain   string `json:"gain,omitempty" yaml:"gain,omitempty"`
-	// Squelch gates the audio, in rtl_fm's own units. Zero leaves it open,
-	// which for broadcast FM is what you want.
+	// In rtl_fm's own units; zero leaves it open, which is what broadcast FM wants.
 	Squelch int           `json:"squelch,omitempty" yaml:"squelch,omitempty"`
 	Presets []TunerPreset `json:"presets,omitempty" yaml:"presets,omitempty"`
 }
 
-// SoundboardConfig points at a directory of sound files. The directory is read
-// when the list is requested rather than cached at startup, so dropping a file
-// in makes it playable without a restart.
+// SoundboardConfig points at a directory of sound files, re-read per request so
+// a new file needs no restart.
 type SoundboardConfig struct {
-	Enabled bool `json:"enabled" yaml:"enabled"`
-	// Path defaults to a "sounds" directory under DataDir.
-	Path string `json:"path,omitempty" yaml:"path,omitempty"`
-	// MaxSeconds caps how long a single sound may be. Sounds are decoded whole
-	// and held in memory so a repeat press costs nothing, which only works while
-	// they stay short.
+	Enabled bool   `json:"enabled" yaml:"enabled"`
+	Path    string `json:"path,omitempty" yaml:"path,omitempty"`
+	// Caps a single sound: sounds are decoded whole and held in memory.
 	MaxSeconds int `json:"max_seconds,omitempty" yaml:"max_seconds,omitempty"`
 }
 
@@ -120,8 +100,7 @@ type AppConfig struct {
 	mu         sync.RWMutex      `json:"-" yaml:"-"`
 }
 
-// SoundboardSettings returns the soundboard configuration with defaults filled
-// in, or nil when it is switched off.
+// SoundboardSettings returns the soundboard config with defaults filled in, or nil when it is off.
 func (c *AppConfig) SoundboardSettings() *SoundboardConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -148,9 +127,7 @@ func (c *AppConfig) SoundboardSettings() *SoundboardConfig {
 	return &out
 }
 
-// applyDefaults fills in the raw PCM layout a producer is assumed to write.
-// Called on a nil receiver for every zone without a source, where it does
-// nothing.
+// Safe on a nil receiver: zones without a source call it too.
 func (s *ZoneSource) applyDefaults(zone *ZoneConfig, pipeDir string) {
 	if s == nil {
 		return
@@ -195,7 +172,6 @@ func DefaultConfig() *AppConfig {
 func LoadConfig(path string) (*AppConfig, error) {
 	cfg := DefaultConfig()
 
-	// 1. Search for config file if not explicitly specified
 	if path == "" {
 		candidates := []string{
 			"config.yaml",
@@ -212,7 +188,6 @@ func LoadConfig(path string) (*AppConfig, error) {
 		}
 	}
 
-	// 2. Read declarative config file
 	if path != "" {
 		data, err := os.ReadFile(path)
 		if err == nil {
@@ -229,7 +204,6 @@ func LoadConfig(path string) (*AppConfig, error) {
 		log.Printf("[Config] Notice: No config.yaml found. Using empty declarative state.")
 	}
 
-	// If no zones were defined in YAML, set default 4 stereo zones
 	if len(cfg.Zones) == 0 {
 		cfg.Zones = []ZoneConfig{
 			{ID: 1, Name: "Zone 1", DanteLeft: "Zone 1 L (Ch 1)", DanteRight: "Zone 1 R (Ch 2)", AlsaDevice: "dante_zone1", PipePath: filepath.Join(cfg.PipeDir, "zone_1.pcm")},
@@ -239,7 +213,6 @@ func LoadConfig(path string) (*AppConfig, error) {
 		}
 	}
 
-	// Ensure PipePath and AlsaDevice are set for all zones
 	for i := range cfg.Zones {
 		if cfg.Zones[i].PipePath == "" {
 			cfg.Zones[i].PipePath = filepath.Join(cfg.PipeDir, fmt.Sprintf("zone_%d.pcm", cfg.Zones[i].ID))
@@ -249,14 +222,12 @@ func LoadConfig(path string) (*AppConfig, error) {
 		}
 	}
 
-	// Sync Stations & Presets for API backward compatibility
 	if len(cfg.Stations) == 0 && len(cfg.Presets) > 0 {
 		cfg.Stations = cfg.Presets
 	} else if len(cfg.Stations) > 0 && len(cfg.Presets) == 0 {
 		cfg.Presets = cfg.Stations
 	}
 
-	// 3. Apply Environment Overrides
 	cfg.applyEnvOverrides()
 
 	return cfg, nil
@@ -308,10 +279,8 @@ func (c *AppConfig) applyEnvOverrides() {
 		c.Soundboard.Path = dir
 	}
 
-	// Latency defaults for source zones, so they can be tuned from the compose
-	// file without editing a mounted config. A zone that states its own value
-	// keeps it: sources have opposite needs, and one number cannot serve a
-	// low-latency interactive producer and a radio that wants a deep buffer.
+	// Defaults only: a zone that states its own value keeps it, since one number
+	// cannot serve both a low-latency producer and a radio wanting a deep buffer.
 	prebuffer := envInt("DANTE_SOURCE_PREBUFFER_MS")
 	buffer := envInt("DANTE_SOURCE_BUFFER_MS")
 	for i := range c.Zones {

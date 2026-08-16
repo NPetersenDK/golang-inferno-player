@@ -1,7 +1,3 @@
-// ==============================================================================
-// Dante Streamer - Frontend Controller (Clean & Maintainable)
-// ==============================================================================
-
 let systemState = { zones: [] };
 let stationsList = [];
 let activeZoneId = 1;
@@ -11,9 +7,8 @@ let soundSearchQuery = "";
 let activePanel = "radio";
 let sseSource = null;
 
-// Everything here is built once and then updated in place. The server
-// broadcasts ten times a second, so rebuilding replaces the element under the
-// pointer: buttons jump, the cursor flickers and a drag snaps back mid-gesture.
+// Built once, then updated in place: the server broadcasts 10x/second, and
+// rebuilding swaps the element under the pointer, so buttons jump and drags snap back.
 const zoneNodes = new Map();
 const soundNodes = new Map();
 const voiceNodes = new Map();
@@ -21,7 +16,6 @@ let zoneDropdownSignature = "";
 let soundGridSignature = "";
 let voiceListSignature = "";
 
-// DOM Elements
 const zonesList = document.getElementById("zonesList");
 const stationsGrid = document.getElementById("stationsGrid");
 const categoryNav = document.getElementById("categoryNav");
@@ -146,7 +140,6 @@ function updateHeader() {
   if (danteDeviceText) danteDeviceText.textContent = systemState.dante_device || "Dante-Pi";
   if (clockStatusText) {
     clockStatusText.textContent = systemState.clock_status || "Clock status unknown";
-    // The detail line is long, so it lives in the tooltip rather than the bar.
     clockStatusText.title = systemState.ptp_status || "";
   }
 
@@ -159,8 +152,7 @@ function updateHeader() {
 function syncZoneDropdowns() {
   if (!systemState.zones || systemState.zones.length === 0) return;
 
-  // Source zones are permanently fed by an external producer, so they are not
-  // valid targets for a station.
+  // Source zones are fed by an external producer, so they cannot be play targets.
   const selectable = systemState.zones.filter(z => !z.is_source);
   if (selectable.length === 0) return;
 
@@ -168,8 +160,8 @@ function syncZoneDropdowns() {
     activeZoneId = selectable[0].id;
   }
 
-  // Only touch the selects when the zone list itself changes. Rewriting their
-  // options on every update closes an open dropdown while you are using it.
+  // Rewrite the selects only when the zone list changes; doing it every update
+  // closes an open dropdown mid-use.
   const signature = selectable.map(z => `${z.id}:${z.name || ""}`).join("|");
   if (signature !== zoneDropdownSignature) {
     zoneDropdownSignature = signature;
@@ -201,8 +193,6 @@ function renderCategoryPills() {
   categoryNav.innerHTML = html;
 }
 
-// Both the tuner and the soundboard are opt-in: with one disabled the server
-// reports enabled:false, its tab never appears and its panel is never drawn.
 function showPanel(name) {
   activePanel = name;
   sourceTabs.querySelectorAll(".nav-link").forEach(btn => {
@@ -214,8 +204,6 @@ function showPanel(name) {
   });
 }
 
-// setTabEnabled hides a tab whose feature is off, and falls back to the radio
-// panel if that tab was the one being looked at.
 function setTabEnabled(tabId, enabled, panel) {
   const tab = document.getElementById(tabId);
   if (!tab || tab.hidden === !enabled) return;
@@ -292,8 +280,7 @@ function renderSoundboard() {
   renderPlaying(sb.playing || []);
 }
 
-// The pad grid only changes when the directory does, so it is rebuilt on a
-// signature. The per-pad counter changes constantly and is written in place.
+// Rebuilt only when the sound list changes; the per-pad counter updates in place.
 function renderSoundsGrid(force) {
   const sb = systemState.soundboard || {};
   const sounds = (sb.sounds || []).filter(s =>
@@ -310,8 +297,7 @@ function renderSoundsGrid(force) {
   (sb.playing || []).forEach(v => counts.set(v.sound_id, (counts.get(v.sound_id) || 0) + 1));
 
   soundNodes.forEach((refs, id) => {
-    // One copy is already shown by the pad lighting up; the badge only earns
-    // its place once the same sound is layered over itself.
+    // The lit pad already means "one copy"; the badge only matters when layered.
     const n = counts.get(id) || 0;
     refs.root.classList.toggle("sound-pad-active", n > 0);
     refs.count.hidden = n < 2;
@@ -358,8 +344,7 @@ function buildSoundsGrid(sounds, sb) {
   });
 }
 
-// Each press layers another voice, so the same sound can appear here several
-// times over and each copy is stopped on its own.
+// Each press layers a voice, so one sound can list several times, each stopped alone.
 function renderPlaying(playing) {
   const signature = playing.map(v => `${v.voice_id}:${v.name}`).join("|");
   if (signature !== voiceListSignature) {
@@ -425,9 +410,7 @@ function renderZones() {
 
   syncZoneDropdowns();
 
-  // The static "Connecting to Dante engine" placeholder lives inside the list.
-  // The old full-rebuild wiped it implicitly; updating in place has to drop it
-  // explicitly the first time real zones arrive.
+  // Updating in place never clears the list, so the static placeholder must go.
   const placeholder = document.getElementById("zonesPlaceholder");
   if (placeholder) placeholder.remove();
 
@@ -472,7 +455,6 @@ function createZoneNode(zone) {
       <i class="fa-solid fa-grip me-1"></i> <span class="js-sound-label"></span>
     </div>
 
-    <!-- Peak Meter Bars -->
     <div class="d-flex flex-column gap-1 mb-2">
       <div class="d-flex align-items-center gap-1">
         <span style="font-size: 0.65rem; width: 8px;" class="text-muted">L</span>
@@ -484,7 +466,6 @@ function createZoneNode(zone) {
       </div>
     </div>
 
-    <!-- Volume & Stop Controls -->
     <div class="d-flex align-items-center gap-2">
       <button class="btn btn-sm btn-outline-secondary py-0 px-2 btn-mute">
         <i class="fa-solid js-mute-icon"></i>
@@ -524,8 +505,7 @@ function createZoneNode(zone) {
     fetch(`/api/zones/${zone.id}/stop`, { method: "POST" });
   });
 
-  // Track the drag so an incoming state event cannot yank the slider away
-  // mid-gesture.
+  // Track the drag so an incoming state event cannot yank the slider mid-gesture.
   refs.slider.addEventListener("pointerdown", () => { refs.dragging = true; });
   refs.slider.addEventListener("pointerup", () => { refs.dragging = false; });
   refs.slider.addEventListener("blur", () => { refs.dragging = false; });
@@ -554,8 +534,7 @@ function updateZoneNode(refs, zone) {
   const isPlaying = (zone.status === "playing");
   const isBuffering = (zone.status === "buffering");
   const padCount = zone.active_sounds || 0;
-  // A pad sounding over an otherwise idle zone still puts audio on the wire, so
-  // as far as the meters and the border are concerned the zone is live.
+  // A pad over an idle zone still puts audio on the wire, so it counts as live.
   const audible = isPlaying || padCount > 0;
 
   refs.root.classList.toggle("active-zone", !zone.is_source && zone.id === activeZoneId);
@@ -571,8 +550,6 @@ function updateZoneNode(refs, zone) {
   const statusKey = `${zone.status}/${zone.is_source}/${padCount > 0}`;
   if (statusKey !== refs.lastStatus) {
     refs.lastStatus = statusKey;
-    // A source zone is never idle in the station sense: it is wired to a
-    // producer and simply waiting for it to send something.
     refs.badge.innerHTML = isPlaying
       ? '<span class="badge text-bg-success"><i class="fa-solid fa-play fa-xs me-1"></i>Playing</span>'
       : isBuffering
@@ -599,7 +576,7 @@ function updateZoneNode(refs, zone) {
   }
   refs.slider.title = `Volume: ${zone.volume}%`;
 
-  // Stop is meaningless on a source zone: the producer owns playback.
+  // The producer owns playback on a source zone, so stop is meaningless there.
   refs.stopBtn.hidden = !!zone.is_source;
   const canStop = !zone.is_source && (isPlaying || isBuffering);
   if (refs.stopBtn.disabled === canStop) refs.stopBtn.disabled = !canStop;

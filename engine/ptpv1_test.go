@@ -36,8 +36,7 @@ func buildFollowUp(seq uint16, preciseNs int64) []byte {
 	return p
 }
 
-// A two-step grandmaster 650 ms ahead of local time and running 30 ppm fast,
-// seen through a link with 20-200 us of one-way delay.
+// Two-step master 650 ms ahead, 30 ppm fast, 20-200 us of one-way delay.
 func TestMonitorRecoversOffsetAndDrift(t *testing.T) {
 	const (
 		syncs      = 32
@@ -54,7 +53,7 @@ func TestMonitorRecoversOffsetAndDrift(t *testing.T) {
 		offsetAt := int64(trueOffset) + int64(trueDrift*float64(localNs-base))
 		delay := int64(20_000 + rng.Intn(180_000))
 
-		// The master sends at (local + offset), we observe it `delay` later.
+		// Master sends at (local + offset); we observe it `delay` later.
 		sendNs := localNs + offsetAt
 		m.handlePacket(buildSync(uint16(i), sendNs-500_000, true), localNs+delay)
 		m.handlePacket(buildFollowUp(uint16(i), sendNs), 0)
@@ -68,8 +67,7 @@ func TestMonitorRecoversOffsetAndDrift(t *testing.T) {
 		t.Fatalf("got %d samples, want %d", len(m.samples), syncs)
 	}
 
-	// Path delay biases the estimate low; the upper-half refit should keep the
-	// residual bias well under the receiver's 10 ms budget.
+	// Path delay biases the estimate low; the upper-half refit absorbs most of it.
 	if err := math.Abs(float64(gotOffset - int64(trueOffset))); err > 300_000 {
 		t.Errorf("offset error %.1f us, want within 300 us (got %d ns)", err/1000, gotOffset)
 	}
@@ -78,8 +76,7 @@ func TestMonitorRecoversOffsetAndDrift(t *testing.T) {
 	}
 }
 
-// Without a Follow_Up the sample must not be committed, otherwise a two-step
-// master's coarse Sync timestamp would poison the fit.
+// A two-step master's Sync timestamp is coarse: never fit it without a Follow_Up.
 func TestTwoStepSyncWithoutFollowUpIsIgnored(t *testing.T) {
 	m := &PTPMonitor{pending: make(map[string]pendingSync)}
 	now := time.Now().UnixNano()
@@ -133,8 +130,7 @@ func TestGrandmasterChangeDiscardsWindow(t *testing.T) {
 	}
 }
 
-// A locked discipline must never move the media clock faster than the
-// configured slew rate, so a running Dante flow sees no discontinuity.
+// After acquire, corrections slew so a running Dante flow sees no discontinuity.
 func TestDisciplineSlewIsRateLimited(t *testing.T) {
 	d := &ClockDiscipline{
 		staticNs:   665 * 1e6,
@@ -146,7 +142,7 @@ func TestDisciplineSlewIsRateLimited(t *testing.T) {
 		acquiredCh: make(chan struct{}),
 		stopChan:   make(chan struct{}),
 	}
-	// 1 ms of error is below the step threshold, so it must be slewed.
+	// 1 ms is below the step threshold, so it must be slewed.
 	target := d.shiftNs + 1_000_000
 	d.applyEstimate(target, 0, time.Now())
 
@@ -156,8 +152,7 @@ func TestDisciplineSlewIsRateLimited(t *testing.T) {
 	}
 }
 
-// The audio pipeline gates on this: it must not release before the first
-// measurement, and it must not block forever on a network without PTP.
+// Must not release before the first measurement, nor block forever without PTP.
 func TestWaitForLockReleasesOnAcquire(t *testing.T) {
 	d := &ClockDiscipline{
 		staticNs:   665 * 1e6,

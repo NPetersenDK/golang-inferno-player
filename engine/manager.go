@@ -59,8 +59,6 @@ func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
 	}
 	sort.Ints(mgr.zoneOrder)
 
-	// Zones wired to an external producer attach themselves and stay attached.
-	// Zones without a source are untouched and idle until someone presses play.
 	for _, id := range mgr.zoneOrder {
 		if err := mgr.zones[id].StartSource(); err != nil {
 			log.Printf("[Zone %d] Source unavailable: %v", id, err)
@@ -74,12 +72,11 @@ func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
 		}
 	}
 
-	// Both are nil unless enabled, and every call on them is nil-safe.
+	// Both are nil when disabled; every method on them is nil-safe.
 	mgr.tuner = NewTuner(cfg, notify)
 	mgr.soundboard = NewSoundboard(cfg, notify)
 
-	// Measure the Dante grandmaster passively, then serve the resulting media
-	// clock to Inferno on both socket paths it may look for.
+	// Inferno looks for the clock socket at either path, so serve both.
 	mgr.ptp = StartPTPMonitor()
 	mgr.discipline = StartClockDiscipline(mgr.ptp)
 	_, _ = StartUsrvclockServer("/tmp/usrvclock", mgr.discipline)
@@ -92,14 +89,12 @@ func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
 	return mgr
 }
 
-// alsaBufferMicros sizes the ALSA playback buffer. Lowering it cuts latency but
-// leaves less margin when the Pi is busy, which shows up as [Audio Health]
-// counting holes.
+// alsaBufferMicros trades latency for margin: lower it and a busy Pi shows up
+// as [Audio Health] holes.
 func alsaBufferMicros() int {
 	return envInt("DANTE_ALSA_BUFFER_US", 250_000)
 }
 
-// envInt reads a positive integer from the environment, or returns def.
 func envInt(name string, def int) int {
 	if v := os.Getenv(name); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
@@ -109,8 +104,7 @@ func envInt(name string, def int) int {
 	return def
 }
 
-// ptpStartupTimeout caps the wait for a grandmaster, so a network without PTP
-// still produces a Dante device instead of hanging.
+// ptpStartupTimeout bounds the wait so a network without PTP still comes up.
 func ptpStartupTimeout() time.Duration {
 	if v := os.Getenv("DANTE_PTP_STARTUP_TIMEOUT_S"); v != "" {
 		if secs, err := strconv.ParseFloat(v, 64); err == nil && secs >= 0 {
@@ -120,10 +114,8 @@ func ptpStartupTimeout() time.Duration {
 	return 15 * time.Second
 }
 
-// danteTXChannels is how many channels we advertise and transmit. Every channel
-// costs a set of mDNS records that the whole segment has to cache, so lowering
-// it shrinks our footprint on smaller devices. Must match TX_CHANNELS in the
-// generated asound.conf; the entrypoint reads the same variable.
+// danteTXChannels must match TX_CHANNELS in the generated asound.conf; the
+// entrypoint reads the same variable.
 func danteTXChannels() int {
 	n := 8
 	if v := os.Getenv("DANTE_TX_CHANNELS"); v != "" {
@@ -147,10 +139,8 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 
 	masterBuf := make([]byte, bytesPerTick)
 
-	// Hold the transmitter until the media clock is pinned to the grandmaster.
-	// The first measurement steps the clock by the master's whole epoch, which
-	// Inferno reacts to by tearing the transmitter down. A second of startup
-	// buys landing that step before anything is on the wire.
+	// Wait for lock first: the first measurement steps the clock by the master's
+	// whole epoch, and Inferno reacts to that by tearing the transmitter down.
 	if m.discipline != nil {
 		timeout := ptpStartupTimeout()
 		if m.discipline.WaitForLock(timeout) {
@@ -163,7 +153,6 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 	for {
 		log.Printf("[Dante Master] Starting continuous %d-channel Dante ALSA transmitter (pcm.inferno)...", numChannels)
 
-		// Launch aplay with 250ms buffer to prevent underruns
 		cmd := exec.Command("aplay", "-D", "inferno", "-t", "raw", "-f", "S32_LE", "-r", "48000", "-c", strconv.Itoa(numChannels),
 			fmt.Sprintf("--buffer-time=%d", alsaBufferMicros()), "-")
 
@@ -193,25 +182,21 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 
 		log.Printf("[Dante Master] Dante ALSA audio transmitter active (%d TX channels). Dante-Pi is now broadcasting.", numChannels)
 
-		// Pre-fill ALSA buffer with 100ms of silence to ensure no initial underruns
+		// 100 ms of silence up front, so the first writes cannot underrun.
 		for i := 0; i < 5; i++ {
 			_, _ = stdin.Write(masterBuf)
 		}
 
-		// No ticker here on purpose. Writing to aplay blocks at exactly the rate
-		// ALSA drains the buffer, which ties this loop to the Dante media clock.
-		// A wall-clock ticker runs on a different oscillator than the
-		// grandmaster and, worse, silently drops ticks when the runtime is busy
-		// - and a dropped tick is a 20 ms hole that is never made up.
+		// No ticker on purpose: writing to aplay blocks at the rate ALSA drains,
+		// which paces this loop off the Dante media clock. A wall-clock ticker
+		// drifts and drops ticks, and a dropped tick is a 20 ms hole.
 		aplayAlive := true
 
 		for aplayAlive {
-			// 1. Clear 8-channel master buffer (silence by default)
 			for i := range masterBuf {
 				masterBuf[i] = 0
 			}
 
-			// 2. Mix active zone audio into respective stereo channel slots
 			m.mu.RLock()
 			for zoneIdx, zoneID := range m.zoneOrder {
 				if zoneIdx*2+1 >= numChannels {
@@ -222,7 +207,6 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 					continue
 				}
 
-				// Slot into channels: Left = zoneIdx*2, Right = zoneIdx*2 + 1
 				chL := zoneIdx * 2
 				chR := zoneIdx*2 + 1
 
@@ -231,17 +215,12 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 					numStereo := len(samples) / 2
 					for f := 0; f < numStereo && f < framesPerTick; f++ {
 						frameOffset := f * numChannels * 4
-						// Left sample
 						binary.LittleEndian.PutUint32(masterBuf[frameOffset+chL*4:frameOffset+(chL+1)*4], uint32(samples[f*2]))
-						// Right sample
 						binary.LittleEndian.PutUint32(masterBuf[frameOffset+chR*4:frameOffset+(chR+1)*4], uint32(samples[f*2+1]))
 					}
 				}
 
-				// Pads sit on top of whatever the zone is playing, so a sound can
-				// fire over a station without interrupting it. Their level feeds
-				// the zone meters too, or a pad over a silent zone would show
-				// nothing.
+				// Pads feed the meters too, or a pad over a silent zone shows nothing.
 				padL, padR := m.soundboard.MixInto(zoneID, masterBuf, chL, chR, numChannels, framesPerTick, player.GainFactor())
 				if padL > 0 || padR > 0 {
 					player.BumpPeaks(padL, padR)
@@ -249,7 +228,6 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 			}
 			m.mu.RUnlock()
 
-			// 3. Send the frame to Inferno ALSA soundcard
 			if _, err := stdin.Write(masterBuf); err != nil {
 				log.Printf("[Dante Master] ALSA write error (%v). Restarting transmitter...", err)
 				aplayAlive = false
@@ -265,8 +243,7 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 	}
 }
 
-// audioHealthLoop reports how often a zone queue ran dry, so a glitch can be
-// counted rather than guessed at by ear. No output means no holes.
+// audioHealthLoop counts dry-queue holes; no output means no holes.
 func (m *PlaybackManager) audioHealthLoop() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -359,10 +336,7 @@ func (m *PlaybackManager) StopAll() {
 	}
 }
 
-// PlaySound layers a pad on top of whatever a zone is playing and returns the
-// voice ID, so the same sound can be fired repeatedly and stopped individually.
-// Source zones are off limits for the same reason stations are: they belong to
-// their producer.
+// PlaySound layers a pad over a zone and returns its voice ID.
 func (m *PlaybackManager) PlaySound(soundID string, zoneID int) (int, error) {
 	z, err := m.GetZone(zoneID)
 	if err != nil {
@@ -445,8 +419,7 @@ func (m *PlaybackManager) GetStatus() SystemStatus {
 	}
 }
 
-// The tuner methods are nil-safe: with none configured they report that
-// instead of panicking, so callers need no feature check.
+// Nil-safe: an unconfigured tuner reports that instead of panicking.
 func (m *PlaybackManager) TunePreset(id string) error { return m.tuner.TunePreset(id) }
 
 func (m *PlaybackManager) TuneFrequency(hz int64) error { return m.tuner.TuneFrequency(hz) }
@@ -471,9 +444,7 @@ func (m *PlaybackManager) clockStatus() (stats PTPStats, clock string, ptp strin
 				stats.SyncPackets, stats.LastSyncAgo)
 	}
 
-	// The absolute offset is the grandmaster's epoch, which is a free-running
-	// counter and means nothing to a reader. What matters is how tightly we
-	// track it and how far the two oscillators are apart.
+	// Not the absolute offset: that is the grandmaster's free-running epoch.
 	clock = fmt.Sprintf("PTP locked · %s · %+.1f ppm", formatSyncError(stats.SyncErrorNs), stats.DriftPPM)
 	ptp = fmt.Sprintf("Grandmaster %s · %d Hz · last Sync %s ago · %d samples in the fit",
 		stats.MasterID, m.cfg.SampleRate, stats.LastSyncAgo, stats.Samples)

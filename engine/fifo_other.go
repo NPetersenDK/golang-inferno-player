@@ -7,8 +7,7 @@ import (
 	"os"
 )
 
-// Named pipes with the semantics we rely on are a POSIX feature; this build
-// exists so the project still compiles for local development on Windows.
+// Stubs so the project still builds off Linux for local development.
 func ensureFIFO(path string) (*os.File, error) {
 	return nil, errors.New("pipe sources are only supported on Linux")
 }

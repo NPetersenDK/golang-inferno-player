@@ -15,8 +15,7 @@ func writeConfig(t *testing.T, body string) string {
 	return path
 }
 
-// Omitting buffer_ms must not leave the queue at the station default, or a
-// source zone would sit on seconds of latency.
+// Falling back to the station default would leave a source zone on seconds of latency.
 func TestSourceBufferDefaultsToTwicePrebuffer(t *testing.T) {
 	cfg, err := LoadConfig(writeConfig(t, `
 zones:
@@ -64,9 +63,8 @@ zones:
 	}
 }
 
-// The env knobs are defaults for zones that say nothing. Two sources on one Pi
-// have opposite needs - an interactive producer wants low latency, a radio
-// wants depth - so a zone that states its own values must keep them.
+// The env knobs are defaults for zones that say nothing: an interactive producer
+// and a radio have opposite needs, so a zone stating its own values must keep them.
 func TestSourceBufferEnvIsOnlyADefault(t *testing.T) {
 	t.Setenv("DANTE_SOURCE_PREBUFFER_MS", "150")
 	t.Setenv("DANTE_SOURCE_BUFFER_MS", "300")
@@ -102,7 +100,6 @@ zones:
 	}
 }
 
-// The env prebuffer still has to produce a matching buffer default.
 func TestEnvPrebufferGetsItsOwnBufferDefault(t *testing.T) {
 	t.Setenv("DANTE_SOURCE_PREBUFFER_MS", "150")
 
@@ -121,7 +118,6 @@ zones:
 	}
 }
 
-// A realtime producer cannot be paused, so it must not inherit backpressure.
 func TestRealtimeSourceIsParsed(t *testing.T) {
 	cfg, err := LoadConfig(writeConfig(t, `
 zones:
@@ -145,7 +141,6 @@ zones:
 	}
 }
 
-// The tuner must not exist unless asked for, in config or environment.
 func TestTunerIsOffByDefault(t *testing.T) {
 	cfg, err := LoadConfig(writeConfig(t, "zones:\n  - id: 1\n"))
 	if err != nil {
@@ -167,7 +162,6 @@ func TestTunerEnvEnablesIt(t *testing.T) {
 	}
 }
 
-// A zone without a source block must come out exactly as before.
 func TestZoneWithoutSourceKeepsDefaults(t *testing.T) {
 	cfg, err := LoadConfig(writeConfig(t, `
 zones:

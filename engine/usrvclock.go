@@ -10,17 +10,17 @@ import (
 	"time"
 )
 
-// UsrvclockFrame matches the exact 40-byte binary frame of the usrvclock protocol v1.0.
-// Protocol spec: https://gitlab.com/lumifaza/usrvclock
+// UsrvclockFrame is the exact 40-byte little-endian frame of usrvclock v1.0.
+// Spec: https://gitlab.com/lumifaza/usrvclock
 type UsrvclockFrame struct {
 	Magic     [2]byte // 'V', 'C'
 	Major     uint16  // 1
 	Minor     uint16  // 0
-	Flags     int16   // 0x0001 (Clock valid)
+	Flags     int16   // 0x0001 = clock valid
 	ClockID   int64   // 0 = CLOCK_REALTIME
-	LastSync  int64   // System monotonic time in nanoseconds
-	Shift     int64   // PTP Grandmaster phase shift in nanoseconds
-	FreqScale float64 // Frequency drift correction
+	LastSync  int64   // system monotonic time, ns
+	Shift     int64   // grandmaster phase shift, ns
+	FreqScale float64 // fractional rate correction
 }
 
 // UsrvclockServer implements the userspace virtual clock Unix datagram server.
@@ -33,9 +33,8 @@ type UsrvclockServer struct {
 	stopChan   chan struct{}
 }
 
-// StartUsrvclockServer binds a Unix datagram socket and continuously serves
-// ClockOverlays to Inferno. The Shift and FreqScale come from the shared
-// ClockDiscipline, so every socket hands out the same media clock.
+// StartUsrvclockServer binds a Unix datagram socket and serves clock overlays to
+// Inferno from the shared ClockDiscipline.
 func StartUsrvclockServer(socketPath string, discipline *ClockDiscipline) (*UsrvclockServer, error) {
 	_ = os.Remove(socketPath)
 
@@ -74,11 +73,10 @@ func (s *UsrvclockServer) makeFrame() []byte {
 		Magic:    [2]byte{'V', 'C'},
 		Major:    1,
 		Minor:    0,
-		Flags:    1, // 0x0001 (Valid clock overlay)
-		ClockID:  0, // 0 = CLOCK_REALTIME (smoothly follows system/PTP clock)
+		Flags:    1,
+		ClockID:  0,
 		LastSync: now,
-		// Inferno computes now_ns = CLOCK_REALTIME + Shift + elapsed*FreqScale,
-		// so Shift carries the grandmaster phase and FreqScale its rate.
+		// Inferno computes now_ns = CLOCK_REALTIME + Shift + elapsed*FreqScale.
 		Shift:     shiftNs,
 		FreqScale: freqScale,
 	}
@@ -103,7 +101,6 @@ func (s *UsrvclockServer) readLoop() {
 		}
 
 		if remoteAddr != nil {
-			// Reply immediately with a valid ClockOverlay
 			frameBytes := s.makeFrame()
 			_, _ = s.conn.WriteToUnix(frameBytes, remoteAddr)
 

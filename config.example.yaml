@@ -1,24 +1,16 @@
-# ==============================================================================
-# Dante Audio Hub - Example Configuration
-# Copy this file to config.yaml and customize for your setup:
-#   cp config.example.yaml config.yaml
-# ==============================================================================
+# Example configuration:  cp config.example.yaml config.yaml
 
-# Dante Device Name (advertised in Dante Controller)
+# The name shown in Dante Controller.
 dante_name: "Dante-Pi"
 
-# Web Management Interface Port
 http_port: 8085
 
-# Native Dante Sample Rate (standard is 48000 Hz)
+# 48000 is the Dante standard; other rates need every device on the network to agree.
 sample_rate: 48000
 
-# Directory for audio FIFO pipes (internal)
 pipe_dir: "/tmp/dante_player"
 
-# ------------------------------------------------------------------------------
-# Dante Output Zones (maps each zone to Dante TX channel pairs)
-# ------------------------------------------------------------------------------
+# Each zone takes one Dante TX channel pair.
 zones:
   - id: 1
     name: "Zone 1 (Living Room)"
@@ -44,19 +36,10 @@ zones:
     dante_right: "Zone 4 R (Ch 8)"
     pipe_path: "/tmp/dante_player/zone_4.pcm"
 
-  # ----------------------------------------------------------------------------
-  # Optional: dedicate a zone to an external producer instead of the station
-  # browser. Add a "source" block and the zone attaches to that FIFO at startup
-  # and stays there: it drops out of the station target list, Stop All leaves it
-  # alone, and its Dante channel pair becomes a permanent feed.
-  #
-  # The engine only knows how to read raw PCM from a FIFO. What writes to it is
-  # up to you - librespot for Spotify Connect, shairport-sync for AirPlay, or
-  # anything else. Omit the block entirely and nothing about the zone changes.
-  #
-  # For Spotify, docker/compose.spotify.yml is a complete stack that runs the
-  # producer alongside the streamer; use it instead of docker/compose.yml.
-  #
+  # Optional: a "source" block locks the zone to an external producer for good.
+  # It leaves the station target list and Stop All ignores it. The engine only
+  # reads raw PCM from a FIFO; anything can write it (librespot, shairport-sync).
+  # For Spotify, docker/compose.spotify.yml runs the producer for you.
   - id: 4
     name: "Spotify"
     dante_left: "Spotify L (Ch 7)"
@@ -65,34 +48,24 @@ zones:
       type: pipe
       path: "/tmp/dante_player/spotify.pcm"
       label: "Spotify"
-      # Raw PCM the producer writes. These defaults match librespot's pipe
-      # backend; FFmpeg resamples to the 48 kHz Dante clock.
+      # Must match what the producer actually writes; these suit librespot's pipe
+      # backend. FFmpeg resamples to the 48 kHz Dante clock.
       format: s16le
       sample_rate: 44100
       channels: 2
-      # A local producer is far steadier than an internet stream, so a source
-      # zone can buffer much less and stay responsive. Defaults to 1000 ms.
+      # A local producer is steadier than an internet stream, so it can buffer
+      # far less than the 1000 ms default.
       prebuffer_ms: 300
-      # buffer_ms caps the queue and is what sets the latency you hear. The
-      # producer is held back by backpressure rather than paced by a network,
-      # so it keeps the queue full - the cap is the steady state, not the
-      # prebuffer. It also decides how much already-queued audio must drain
-      # before a track change in the app reaches the speakers. Defaults to
-      # twice prebuffer_ms. Lower it if the producer feels laggy, raise it if
-      # you hear dropouts.
-      #
-      # DANTE_SOURCE_PREBUFFER_MS and DANTE_SOURCE_BUFFER_MS override both for
-      # every source zone, so they can be tuned from the compose file without
-      # editing a mounted config.
+      # buffer_ms caps the queue, and since backpressure keeps it full it is the
+      # latency you actually hear, including the lag before a track change
+      # reaches the speakers. Defaults to twice prebuffer_ms. Lower if laggy,
+      # raise if you hear dropouts. DANTE_SOURCE_PREBUFFER_MS and
+      # DANTE_SOURCE_BUFFER_MS override both from the compose file.
       buffer_ms: 600
-  # ----------------------------------------------------------------------------
 
-# ------------------------------------------------------------------------------
-# Optional: RTL-SDR tuner feeding one source zone.
-#
-# Disabled by default - with enabled false nothing starts, no API is served and
-# the UI shows nothing. zone_id must name a zone whose source is a realtime pipe
-# at the path the tuner writes to:
+# Optional: RTL-SDR tuner feeding one source zone. With enabled false nothing
+# starts and no API is served. zone_id must name a zone whose source is a
+# realtime pipe at the path the tuner writes to:
 #
 #   - id: 3
 #     name: "Radio"
@@ -105,23 +78,16 @@ zones:
 #       realtime: true      # an SDR cannot be paused, so never block it
 #       format: s16le
 #       # Must match rtl_fm's own "Output at N Hz." line, which differs between
-#       # builds. Get it wrong and it only ever sounds like a bad signal, so the
-#       # tuner compares the two and shouts RATE MISMATCH in the log.
+#       # builds. A mismatch just sounds like a bad signal, so the tuner logs
+#       # RATE MISMATCH instead.
 #       sample_rate: 170000
 #       channels: 1         # mono; FFmpeg upmixes to stereo
 #
-# One dongle tunes one frequency at a time. Retuning restarts the receiver, so
-# the zone goes quiet for a moment and comes back on its own.
-# ------------------------------------------------------------------------------
-# Find the device with:  docker exec dante-streamer rtl_test -t
-# It prints e.g.  0:  Realtek, RTL2838UHIDIR, SN: 00000001
-# rtl_fm prints the same list every time it starts, so it also appears in the
-# container log under [Tuner].
+# Retuning restarts the receiver, so the zone goes quiet for a moment.
 #
-# "device" takes an index or a serial, matched exactly or by prefix or suffix.
-# Prefer the serial: indices shift when USB devices come and go. Give a dongle
-# its own serial with:  rtl_eeprom -d 0 -s dante-fm
-# ------------------------------------------------------------------------------
+# List dongles with:  docker exec dante-streamer rtl_test -t
+# Prefer a serial over an index - indices shift when USB devices come and go.
+# Set one with:  rtl_eeprom -d 0 -s dante-fm
 # tuner:
 #   enabled: false
 #   zone_id: 3
@@ -135,31 +101,14 @@ zones:
 #       name: "P4 Trekanten"
 #       frequency_hz: 96400000
 
-# ------------------------------------------------------------------------------
-# Soundboard
-# ------------------------------------------------------------------------------
-# Drops audio files in a directory and turns each one into a pad in the UI. The
-# directory is re-read as you go, so a new file is playable without a restart.
-#
-# A pad plays on top of whatever the target zone is already doing rather than
-# replacing it, and pressing the same pad again layers another copy instead of
-# restarting the first. That is what makes it a soundboard and not a player.
-#
-# Only zones without a "source" can be targeted, the same rule stations follow:
-# a Spotify or FM zone belongs to its producer and is left alone.
-#
-# Sounds are decoded once and kept in memory so a repeat press is instant, which
-# is why max_seconds exists. On by default; set enabled: false to remove it from
-# the UI and the API entirely.
-# ------------------------------------------------------------------------------
+# Soundboard: every audio file in the directory becomes a pad, re-read as you go
+# so new files need no restart. Pads layer on top of the zone rather than
+# replacing it. Source zones cannot be targeted. On by default.
 # soundboard:
 #   enabled: true
 #   path: "./data/sounds"   # defaults to a "sounds" folder under data_dir
-#   max_seconds: 60         # longer files are refused rather than held in RAM
+#   max_seconds: 60         # decoded pads are held in RAM, so long files are refused
 
-# ------------------------------------------------------------------------------
-# Radio Stations & Audio Streams
-# ------------------------------------------------------------------------------
 stations:
   - id: "dr-p3"
     name: "DR P3"

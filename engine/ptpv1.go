@@ -1,15 +1,8 @@
 package engine
 
-// Passive IEEE 1588-2002 (PTPv1) listener and clock discipline.
-//
-// Inferno stamps outgoing packets with CLOCK_REALTIME + the Shift we serve over
-// usrvclock, and the receiver drops anything older than the flow latency. So
-// Shift has to equal (grandmaster time - CLOCK_REALTIME), measured here from
-// the grandmaster's own Sync / Follow_Up messages.
-//
-// Listen only: no Delay_Req, no BMCA, no stepping of the system clock. Path
-// delay is therefore unmeasured and appears as a constant bias of tens of
-// microseconds, against a 10 ms jitter buffer budget.
+// Passive IEEE 1588-2002 (PTPv1) listener: Shift must equal (grandmaster time -
+// CLOCK_REALTIME), measured from the master's Sync / Follow_Up. Listen only, so
+// path delay is unmeasured and biases the result by tens of microseconds.
 
 import (
 	"encoding/binary"
@@ -62,7 +55,6 @@ const (
 	ptpPendingMaxAge    = 3 * time.Second
 	ptpHoldover         = 30 * time.Second
 
-	// Sanity bound on the rate difference between two crystal oscillators.
 	ptpMaxDriftNsPerSec = 500_000.0 // 500 ppm
 )
 
@@ -88,15 +80,14 @@ type PTPStats struct {
 	LastSyncAgo string  `json:"last_sync_ago"`
 }
 
-// PTPMonitor tracks the phase and rate of the Dante grandmaster relative to
-// the local CLOCK_REALTIME.
+// PTPMonitor tracks the Dante grandmaster's phase and rate against CLOCK_REALTIME.
 type PTPMonitor struct {
 	mu      sync.RWMutex
 	samples []ptpSample
 
 	fitT0 int64   // local time the fit is anchored at
-	fitA  float64 // offset in ns at fitT0
-	fitB  float64 // ns of offset gained per second of local time
+	fitA  float64 // offset at fitT0, ns
+	fitB  float64 // offset gained per second of local time, ns/s
 
 	locked        bool
 	twoStep       bool
@@ -112,9 +103,8 @@ type PTPMonitor struct {
 	conns    []*net.UDPConn
 }
 
-// StartPTPMonitor joins the PTPv1 multicast group and begins measuring.
-// It never fails hard: without a grandmaster on the wire the monitor simply
-// never locks and the caller falls back to its static offset.
+// StartPTPMonitor joins the PTPv1 multicast group and begins measuring. It never
+// fails hard: with no grandmaster on the wire it simply never locks.
 func StartPTPMonitor() *PTPMonitor {
 	m := &PTPMonitor{
 		pending:  make(map[string]pendingSync),
@@ -160,8 +150,8 @@ func (m *PTPMonitor) Stop() {
 	}
 }
 
-// Estimate returns the current grandmaster offset and the fractional rate
-// difference, or ok=false while unlocked or in holdover.
+// Estimate returns the grandmaster offset in ns and the fractional rate
+// difference, or ok=false while unlocked or past holdover.
 func (m *PTPMonitor) Estimate() (offsetNs int64, freqScale float64, ok bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -241,8 +231,8 @@ func (m *PTPMonitor) handlePacket(pkt []byte, rxNs int64) {
 		m.addSample(rxNs, origin-rxNs)
 
 	case ptpCtlFollowUp:
-		// A Follow_Up proves this master is two-step, so from here on we wait
-		// for one even if the assist flag is ever missing.
+		// A Follow_Up proves this master is two-step, so keep waiting for one
+		// even if the assist flag ever goes missing.
 		m.setTwoStep()
 		assoc := binary.BigEndian.Uint16(pkt[offFollowUpAssocSeq:])
 		m.pendMu.Lock()
@@ -275,8 +265,8 @@ func (m *PTPMonitor) setTwoStep() {
 	m.mu.Unlock()
 }
 
-// noteMaster resets the fit when a different clock starts sending Sync, since
-// the two grandmasters share no timeline.
+// noteMaster drops the fit when a different clock starts sending Sync: two
+// grandmasters share no timeline.
 func (m *PTPMonitor) noteMaster(srcID string, clockID [8]byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -317,12 +307,9 @@ func (m *PTPMonitor) addSample(localNs, offsetNs int64) {
 	m.refit()
 }
 
-// refit runs a least-squares fit of offset against local time, giving phase and
-// rate in one step.
-//
-// Path delay biases one-way measurements one-sidedly: queueing only ever makes
-// a packet look later, i.e. the offset too small. So the fit is repeated on the
-// half of the window with the highest residuals, the least delayed packets.
+// refit fits offset against local time. Queueing can only ever make a packet
+// look later, biasing the offset low, so the fit is repeated on the half of the
+// window with the highest residuals: the least delayed packets.
 func (m *PTPMonitor) refit() {
 	n := len(m.samples)
 	if n < ptpMinSamplesForFit {
@@ -365,10 +352,8 @@ func (m *PTPMonitor) refit() {
 
 	m.fitT0, m.fitA, m.fitB = t0, a, b
 	if !m.locked {
-		// Log the raw timestamps too, not just the difference: a Dante
-		// grandmaster runs a free-running counter rather than wall time, and
-		// seeing its absolute value is the only way to tell a correct reading
-		// from a misparsed one.
+		// A Dante grandmaster's epoch is a free-running counter, not Unix time,
+		// so the raw readings are the only way to spot a misparse.
 		last := m.samples[n-1]
 		masterNs := last.localNs + last.offsetNs
 		log.Printf("[PTP] locked to %s: offset %.3f ms, drift %.2f ppm (%d samples)",
@@ -423,7 +408,7 @@ func lsqFit(samples []ptpSample, t0 int64, keep []bool) (a, b float64, ok bool) 
 	}
 	den := n*sxx - sx*sx
 	if den == 0 {
-		// All samples share one timestamp: phase only, no rate information.
+		// All samples share one timestamp: phase only, no rate.
 		return sy / n, 0, true
 	}
 	b = (n*sxy - sx*sy) / den
@@ -463,8 +448,8 @@ func openPTPSocket(ifi *net.Interface, port int) (*net.UDPConn, error) {
 	return c, nil
 }
 
-// resolveDanteInterface accepts either an interface name or an IPv4 address,
-// matching what entrypoint.sh puts in DANTE_INTERFACE / INFERNO_BIND_IP.
+// resolveDanteInterface accepts an interface name or an IPv4 address, matching
+// what entrypoint.sh puts in DANTE_INTERFACE / INFERNO_BIND_IP.
 func resolveDanteInterface() *net.Interface {
 	var want string
 	for _, env := range []string{"DANTE_PTP_IFACE", "DANTE_INTERFACE", "INFERNO_BIND_IP"} {
@@ -494,9 +479,8 @@ func resolveDanteInterface() *net.Interface {
 	return nil
 }
 
-// ClockDiscipline turns the raw PTP measurement into the Shift and FreqScale
-// values handed to Inferno, smoothing corrections so the media clock does not
-// jump under a running flow.
+// ClockDiscipline turns the PTP measurement into the Shift and FreqScale handed
+// to Inferno, slewing corrections so the media clock does not jump under a flow.
 type ClockDiscipline struct {
 	ptp *PTPMonitor
 
@@ -513,17 +497,17 @@ type ClockDiscipline struct {
 	maxSlewPPM  float64
 	publishFreq bool
 
-	// Closed once the grandmaster has been measured for the first time, so the
-	// audio pipeline can hold off until the big initial step is behind it.
+	// Closed on the first measurement, so the audio pipeline can wait out the
+	// large initial step.
 	acquiredCh   chan struct{}
 	acquiredOnce sync.Once
 
 	stopChan chan struct{}
 }
 
-// StartClockDiscipline begins tracking the grandmaster. Until PTP locks it
-// serves the static DANTE_PTP_OFFSET_MS value, so Inferno's ALSA plugin still
-// gets a valid overlay immediately and never hits its 5 second timeout.
+// StartClockDiscipline begins tracking the grandmaster, serving the static
+// DANTE_PTP_OFFSET_MS until PTP locks so Inferno's ALSA plugin has a valid
+// overlay immediately and never hits its 5 second timeout.
 func StartClockDiscipline(ptp *PTPMonitor) *ClockDiscipline {
 	d := &ClockDiscipline{
 		ptp:         ptp,
@@ -552,19 +536,10 @@ func (d *ClockDiscipline) Stop() {
 	}
 }
 
-// Overlay returns the values to put in the next usrvclock frame.
-//
-// FreqScale is withheld by default. Inferno republishes it as a frequency
-// offset in its once-per-second heartbeat to 224.0.0.233, a link-local group
-// switches flood to every port. We measure the raw difference between this
-// host's crystal and the grandmaster - tens of thousands of ppb - because we
-// never discipline anything, we only add an overlay. A real Dante device is
-// physically slaved and reports a value orders of magnitude smaller, so ours is
-// unlike anything else on the segment, and it reaches every device on it.
-//
-// Dropping it costs at most a few microseconds of extrapolation between the
-// 250 ms overlay updates, against a 10 ms receiver budget. Set
-// DANTE_PUBLISH_FREQ_SCALE=1 to restore the old behaviour.
+// Overlay returns the values for the next usrvclock frame. FreqScale is withheld
+// by default (DANTE_PUBLISH_FREQ_SCALE=1 restores it): Inferno floods it to every
+// device on the segment, and our undisciplined crystal difference is tens of
+// thousands of ppb where a slaved Dante device reports orders of magnitude less.
 func (d *ClockDiscipline) Overlay() (shiftNs int64, freqScale float64) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -575,8 +550,7 @@ func (d *ClockDiscipline) Overlay() (shiftNs int64, freqScale float64) {
 }
 
 // SyncError is how far the media clock we serve sits from the measured
-// grandmaster, which is what decides whether a receiver accepts a packet. Not
-// the network path delay, which a listen-only implementation never measures.
+// grandmaster, in ns. Not path delay, which is never measured here.
 func (d *ClockDiscipline) SyncError() (ns int64, ok bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -589,12 +563,9 @@ func (d *ClockDiscipline) Locked() bool {
 	return d.acquired
 }
 
-// WaitForLock blocks until the grandmaster has been measured, reporting whether
-// that happened before the timeout.
-//
-// The first measurement steps the media clock by the grandmaster's whole epoch,
-// which for a free-running counter is years. Inferno reacts by rebootstrapping
-// every flow, so callers use this to land the step before anything transmits.
+// WaitForLock blocks until the grandmaster has been measured, or the timeout.
+// The first measurement steps the media clock by the grandmaster's whole epoch
+// and Inferno rebootstraps every flow, so callers land it before transmitting.
 func (d *ClockDiscipline) WaitForLock(timeout time.Duration) bool {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -628,8 +599,8 @@ func (d *ClockDiscipline) tick() {
 	now := time.Now()
 	target, freq, ok := d.ptp.Estimate()
 	if !ok {
-		// No grandmaster yet, or holdover expired: keep serving whatever we
-		// last converged on rather than snapping back to the static value.
+		// Keep serving whatever we last converged on rather than snapping back
+		// to the static value.
 		d.mu.Lock()
 		d.lastTick = now
 		d.mu.Unlock()

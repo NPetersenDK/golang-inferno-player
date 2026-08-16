@@ -29,8 +29,6 @@ func makeMaster(frames int) []byte {
 
 func TestMixIntoLayersRepeatsOfTheSameSound(t *testing.T) {
 	sb := newTestBoard()
-	// The same sound fired twice: the second press must add to the first, not
-	// replace it.
 	samples := []int32{100, 200, 300, 400}
 	sb.voices = []*voice{
 		{id: 1, soundID: "a", zoneID: 1, samples: samples},
@@ -110,8 +108,6 @@ func TestMixIntoAppliesZoneGain(t *testing.T) {
 	sb.voices = []*voice{{id: 1, zoneID: 1, samples: []int32{1000, 1000}}}
 
 	master := makeMaster(1)
-	// A muted zone reports gain 0, and that has to silence pads too or the mute
-	// button is a lie.
 	sb.MixInto(1, master, 0, 1, testChannels, 1, 0.0)
 
 	if got := readFrame(t, master, 0, 0); got != 0 {
@@ -130,7 +126,6 @@ func TestMixIntoRetiresFinishedVoices(t *testing.T) {
 	if len(sb.voices) != 0 {
 		t.Fatalf("voices left = %d, want 0: a voice that ran out must be dropped", len(sb.voices))
 	}
-	// The tail beyond the sound stays silent rather than repeating.
 	if got := readFrame(t, master, 3, 0); got != 0 {
 		t.Errorf("frame 3 = %d, want 0 past the end of the sound", got)
 	}
@@ -166,7 +161,6 @@ func TestMixIntoReportsPeakSoTheMetersMove(t *testing.T) {
 		t.Errorf("peakR = %v, want 0: the right channel was silent", peakR)
 	}
 
-	// Nothing sounding must report nothing, or an idle zone's meters would stick.
 	sb.voices = nil
 	if l, r := sb.MixInto(1, makeMaster(1), 0, 1, testChannels, 1, 1.0); l != 0 || r != 0 {
 		t.Errorf("peaks = %v/%v with no voices, want 0/0", l, r)
@@ -178,7 +172,6 @@ func TestMixIntoPeakFollowsZoneGain(t *testing.T) {
 	full := int32(math.MaxInt32)
 	sb.voices = []*voice{{id: 1, zoneID: 1, samples: []int32{full, full}}}
 
-	// Muted zone: the pad is inaudible, so the meters must not twitch either.
 	peakL, _ := sb.MixInto(1, makeMaster(1), 0, 1, testChannels, 1, 0.0)
 	if peakL != 0 {
 		t.Errorf("peakL = %v while muted, want 0", peakL)
@@ -247,7 +240,6 @@ func TestStopVoiceReportsWhetherItWasPlaying(t *testing.T) {
 func TestNilSoundboardIsInert(t *testing.T) {
 	var sb *Soundboard
 
-	// Every call has to be nil-safe so the disabled case needs no feature check.
 	if sb.Enabled() {
 		t.Error("Enabled() = true on a nil soundboard")
 	}
@@ -296,8 +288,7 @@ func TestPlayRejectsUnknownSound(t *testing.T) {
 	sb := newTestBoard()
 	sb.cfg = config.SoundboardConfig{Enabled: true, Path: t.TempDir(), MaxSeconds: 60}
 
-	// A crafted ID must not reach a file outside the directory: only names the
-	// scan turned up are playable.
+	// A crafted ID must not reach a file outside the directory.
 	for _, id := range []string{"missing.mp3", "../../etc/passwd", "/etc/passwd"} {
 		if _, err := sb.Play(id, 1); err == nil {
 			t.Errorf("Play(%q) succeeded, want an error", id)

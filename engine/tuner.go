@@ -13,9 +13,8 @@ import (
 	"dante-player/config"
 )
 
-// rtl_fm announces its output rate on stderr, and which rate -M wbfm settles on
-// varies between builds. Rather than hardcode a guess, we read that line and
-// compare it against what the zone was told to expect.
+// Which rate -M wbfm settles on varies between builds, so read the rate rtl_fm
+// announces on stderr instead of guessing.
 var rtlOutputRate = regexp.MustCompile(`Output at (\d+) Hz`)
 
 // TunerState is what the UI and API see.
@@ -29,11 +28,8 @@ type TunerState struct {
 	Presets     []config.TunerPreset `json:"presets"`
 }
 
-// Tuner drives an SDR into a zone's source FIFO.
-//
-// Retuning restarts the receiver, because that is all rtl_fm offers. The gap
-// costs the zone its prebuffer, so it reports idle for a moment and comes back
-// on its own.
+// Tuner drives an SDR into a zone's source FIFO. Retuning restarts rtl_fm, which
+// costs the zone its prebuffer, so it reports idle for a moment.
 type Tuner struct {
 	cfg      config.TunerConfig
 	fifoPath string
@@ -50,8 +46,7 @@ type Tuner struct {
 	notify func()
 }
 
-// NewTuner returns nil unless the tuner is enabled and its zone is a realtime
-// pipe source, so a misconfigured or unwanted tuner simply does not exist.
+// NewTuner returns nil unless the tuner is enabled and its zone has a pipe source.
 func NewTuner(cfg *config.AppConfig, notify func()) *Tuner {
 	if cfg.Tuner == nil || !cfg.Tuner.Enabled {
 		return nil
@@ -83,19 +78,14 @@ func NewTuner(cfg *config.AppConfig, notify func()) *Tuner {
 		zoneRate: zone.Source.SampleRate,
 		notify:   notify,
 	}
-	// rtl_fm lists every attached device with its serial on stderr each time it
-	// starts, and that lands in this log, so tuning once is enough to find the
-	// value for "device".
 	log.Printf("[Tuner] enabled on zone %d, device %q, %d presets",
 		t.cfg.ZoneID, t.deviceArg(), len(t.cfg.Presets))
 	return t
 }
 
-// usesGainFlag reports whether -g should be passed at all.
-//
-// rtl_fm's -g takes a number in dB, and automatic gain is its default, reached
-// only by omitting the flag. Passing a word parses as 0, the lowest gain the
-// hardware has, which is indistinguishable from no signal.
+// usesGainFlag reports whether -g should be passed at all. rtl_fm's -g takes dB
+// and reaches auto gain only by omitting the flag; "auto" would parse as 0 dB,
+// the lowest gain the hardware has.
 func (t *Tuner) usesGainFlag() bool {
 	return t.cfg.Gain != "" && !strings.EqualFold(t.cfg.Gain, "auto")
 }
@@ -157,8 +147,8 @@ func (t *Tuner) TuneFrequency(hz int64) error {
 	return t.tune("", hz)
 }
 
-// checkFrequency bounds the value to what an R820T tuner covers. The common
-// mistake is writing megahertz into a hertz field, which this catches.
+// checkFrequency bounds hz to an R820T's range, catching megahertz written into
+// a hertz field.
 func checkFrequency(hz int64) error {
 	if hz < 24_000_000 || hz > 1_766_000_000 {
 		return fmt.Errorf("%d Hz is outside the tuner's 24 MHz - 1766 MHz range (96.4 MHz is 96400000)", hz)
@@ -178,10 +168,8 @@ func (t *Tuner) tune(presetID string, hz int64) error {
 		return fmt.Errorf("%s", t.lastErr)
 	}
 
-	// Plain -M wbfm, with no rate flags of our own: it is the documented
-	// broadcast FM mode and outputs mono s16le at TunerOutputRate, which FFmpeg
-	// resamples onto the Dante clock. Overriding -s and -r here produced a
-	// stream at a rate the zone was not told about.
+	// No -s/-r of our own: overriding them yields a stream at a rate the zone was
+	// never told about.
 	args := []string{
 		"-d", t.deviceArg(),
 		"-f", strconv.FormatInt(hz, 10),
@@ -252,9 +240,8 @@ func (t *Tuner) changed() {
 	}
 }
 
-// checkOutputRate compares the rate rtl_fm reports against what the zone was
-// configured for. Getting this wrong is not subtle in the log and completely
-// inaudible in the audio, where it just sounds like a bad signal.
+// checkOutputRate flags a rate mismatch loudly, because in the audio it only
+// sounds like a bad signal.
 func (t *Tuner) checkOutputRate(line string) {
 	m := rtlOutputRate.FindStringSubmatch(line)
 	if m == nil {
@@ -269,8 +256,7 @@ func (t *Tuner) checkOutputRate(line string) {
 		rate, t.zoneID, t.zoneRate, rate)
 }
 
-// logWriter forwards a child process's stderr into our log, a line at a time,
-// optionally handing each line to a hook.
+// logWriter forwards a child's stderr into our log a line at a time.
 type logWriter struct {
 	prefix  string
 	inspect func(line string)

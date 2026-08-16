@@ -7,9 +7,8 @@ import (
 	"time"
 )
 
-// Kernel receive timestamps are a Linux socket feature; elsewhere (only
-// relevant for cross-compiling and local development) we fall back to the
-// userspace arrival time.
+// Off Linux there are no kernel receive timestamps; fall back to userspace
+// arrival time.
 func enableRxTimestamps(c *net.UDPConn) bool { return false }
 
 func readPacketWithTimestamp(c *net.UDPConn, buf, oob []byte) (n int, rxNs int64, err error) {
