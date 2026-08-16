@@ -96,6 +96,11 @@ type ZonePlayer struct {
 	emptyPulls  atomic.Int64
 	starvations atomic.Uint64
 
+	// Backpressure is a pipe producer's only clock, so a drain rate above
+	// realtime means it has lost it.
+	framesIn atomic.Uint64
+	drops    atomic.Uint64
+
 	// Per zone: a FIFO producer is steadier than a stream and can run shorter.
 	prebufferChunks int
 	queueChunks     int
@@ -465,6 +470,7 @@ func (z *ZonePlayer) decodeInto(ctx context.Context, args []string, backpressure
 		if err := z.enqueue(ctx, samples, backpressure); err != nil {
 			return err
 		}
+		z.framesIn.Add(uint64(numSamples / 2))
 	}
 }
 
@@ -510,6 +516,7 @@ func (z *ZonePlayer) enqueue(ctx context.Context, samples []int32, backpressure 
 	default:
 		select {
 		case <-z.audioChan:
+			z.drops.Add(1)
 		default:
 		}
 		z.audioChan <- samples
@@ -617,6 +624,13 @@ func (z *ZonePlayer) GainFactor() float64 {
 func (z *ZonePlayer) StarvationCount() uint64 {
 	return z.starvations.Load()
 }
+
+// SourceFramesIn is 48 kHz frames accepted from the decoder.
+func (z *ZonePlayer) SourceFramesIn() uint64 { return z.framesIn.Load() }
+
+// DropCount is chunks discarded to keep a realtime producer moving.
+
+func (z *ZonePlayer) DropCount() uint64 { return z.drops.Load() }
 
 func (z *ZonePlayer) setPrimed(primed bool) {
 	z.emptyPulls.Store(0)

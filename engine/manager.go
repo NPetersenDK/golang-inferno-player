@@ -243,14 +243,22 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 	}
 }
 
-// audioHealthLoop counts dry-queue holes; no output means no holes.
+// audioHealthLoop counts dry-queue holes, and how fast a source zone's producer
+// is drained; no output means neither is off.
 func (m *PlaybackManager) audioHealthLoop() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 
 	previous := make(map[int]uint64)
-	for range ticker.C {
-		var report []string
+	prevFrames := make(map[int]uint64)
+	prevDrops := make(map[int]uint64)
+	last := time.Now()
+
+	for now := range ticker.C {
+		elapsed := now.Sub(last).Seconds()
+		last = now
+
+		var report, pacing []string
 		m.mu.RLock()
 		for _, id := range m.zoneOrder {
 			zone := m.zones[id]
@@ -262,11 +270,31 @@ func (m *PlaybackManager) audioHealthLoop() {
 				report = append(report, fmt.Sprintf("zone %d: %d", id, delta))
 			}
 			previous[id] = total
+
+			if !zone.IsSource() {
+				continue
+			}
+			frames, drops := zone.SourceFramesIn(), zone.DropCount()
+			seen, known := prevFrames[id]
+			framesDelta, dropsDelta := frames-seen, drops-prevDrops[id]
+			prevFrames[id], prevDrops[id] = frames, drops
+
+			// An idle producer is not a pacing fault.
+			if !known || elapsed <= 0 || framesDelta == 0 {
+				continue
+			}
+			ratio := float64(framesDelta) / (48000 * elapsed)
+			if ratio > 1.02 || dropsDelta > 0 {
+				pacing = append(pacing, fmt.Sprintf("zone %d: %.0f%% of realtime, %d chunks dropped", id, ratio*100, dropsDelta))
+			}
 		}
 		m.mu.RUnlock()
 
 		if len(report) > 0 {
 			log.Printf("[Audio Health] queue ran dry in the last minute, 20 ms of silence each (%s)", strings.Join(report, ", "))
+		}
+		if len(pacing) > 0 {
+			log.Printf("[Source Health] producer draining faster than realtime, so it will run its tracks short (%s)", strings.Join(pacing, ", "))
 		}
 	}
 }
