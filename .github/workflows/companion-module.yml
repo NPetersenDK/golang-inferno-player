@@ -47,7 +47,7 @@ jobs:
 
       - name: Build official Companion package
         working-directory: bitfocus
-        run: npx companion-module-build
+        run: npm run build
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

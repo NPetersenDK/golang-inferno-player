@@ -622,6 +622,30 @@ export default class DanteStreamerInstance extends InstanceBase {
 					return !!(zone && zone.volume === targetVolume)
 				},
 			},
+
+			zone_playing: {
+				type: 'boolean',
+				name: 'Zone is Actively Playing Audio',
+				description: 'Highlights when the zone is playing any stream or source',
+				defaultStyle: {
+					bgcolor: combineRgb(200, 60, 60),
+					color: combineRgb(255, 255, 255),
+				},
+				options: [
+					{
+						type: 'dropdown',
+						id: 'zone_id',
+						label: 'Zone',
+						default: this.config.default_zone || 1,
+						choices: this.getZoneChoices(),
+					},
+				],
+				callback: (feedback) => {
+					const zoneId = Number(feedback.options.zone_id)
+					const zone = (this.zones || []).find((z) => z.id === zoneId)
+					return !!(zone && (zone.status === 'playing' || zone.status === 'buffering'))
+				},
+			},
 		})
 	}
 
@@ -888,6 +912,7 @@ export default class DanteStreamerInstance extends InstanceBase {
 						up: [],
 					},
 				],
+				feedbacks: [],
 			}
 			fmPresetIds.push('fm_tuner_off')
 		}
@@ -958,6 +983,18 @@ export default class DanteStreamerInstance extends InstanceBase {
 							},
 						],
 						up: [],
+					},
+				],
+				feedbacks: [
+					{
+						feedbackId: 'zone_playing',
+						options: {
+							zone_id: z.id,
+						},
+						style: {
+							bgcolor: combineRgb(200, 60, 60),
+							color: combineRgb(255, 255, 255),
+						},
 					},
 				],
 			}
