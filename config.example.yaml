@@ -136,6 +136,28 @@ zones:
 #       frequency_hz: 96400000
 
 # ------------------------------------------------------------------------------
+# Soundboard
+# ------------------------------------------------------------------------------
+# Drops audio files in a directory and turns each one into a pad in the UI. The
+# directory is re-read as you go, so a new file is playable without a restart.
+#
+# A pad plays on top of whatever the target zone is already doing rather than
+# replacing it, and pressing the same pad again layers another copy instead of
+# restarting the first. That is what makes it a soundboard and not a player.
+#
+# Only zones without a "source" can be targeted, the same rule stations follow:
+# a Spotify or FM zone belongs to its producer and is left alone.
+#
+# Sounds are decoded once and kept in memory so a repeat press is instant, which
+# is why max_seconds exists. On by default; set enabled: false to remove it from
+# the UI and the API entirely.
+# ------------------------------------------------------------------------------
+# soundboard:
+#   enabled: true
+#   path: "./data/sounds"   # defaults to a "sounds" folder under data_dir
+#   max_seconds: 60         # longer files are refused rather than held in RAM
+
+# ------------------------------------------------------------------------------
 # Radio Stations & Audio Streams
 # ------------------------------------------------------------------------------
 stations:

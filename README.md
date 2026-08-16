@@ -137,6 +137,10 @@ The entrypoint script automatically:
 | POST | /api/zones/:id/volume | Sets zone volume with payload {"volume": 80} (0-100) |
 | POST | /api/zones/:id/mute | Toggles mute on a zone |
 | POST | /api/stop-all | Stops playback on all zones simultaneously |
+| GET | /api/soundboard | Lists the available sounds and everything currently sounding |
+| POST | /api/soundboard/play | Fires a pad with payload {"sound_id": "airhorn.mp3", "zone_id": 1}, returns its voice_id |
+| POST | /api/soundboard/stop | Stops one voice with payload {"voice_id": 7} |
+| POST | /api/soundboard/stop-all | Stops every sound, or one zone's with payload {"zone_id": 1} |
 | GET | /api/events | Server-Sent Events (SSE) stream for real-time state synchronization |
 
 ## Optional: External Audio Sources (Spotify, AirPlay, ...)
@@ -207,6 +211,26 @@ Then give a zone a realtime pipe source and add a `tuner` block naming it — se
 
 One dongle tunes one frequency at a time, so FM and DAB+ cannot run in parallel from a single stick. Retuning restarts the receiver, which costs the zone its prebuffer: it reports idle for a moment and comes back on its own. With squelch enabled for scanner use, the zone shows **Waiting** between transmissions and **Playing** when there is traffic.
 
+## Soundboard
+
+Drop audio files into a directory and each one becomes a pad in the UI. The directory is re-read as you go, so a file you add is playable without a restart. With the compose file as shipped that directory is `./sounds` next to it:
+
+```
+mkdir sounds
+cp airhorn.mp3 applause.wav sounds/
+```
+
+A pad plays **on top of** whatever the target zone is already doing rather than replacing it, and pressing the same pad again layers another copy instead of restarting the first. That is what separates a soundboard from a player: you can fire the same sound three times over itself, and **Stop All Sounds** clears the lot without touching the station underneath.
+
+Pads follow the same rule as stations: only zones without a `source` can be targeted. A Spotify or FM zone belongs to its producer and is left alone. Zone volume and mute apply to pads too, so muting a zone silences all of it.
+
+Sounds are decoded once through FFmpeg and kept in memory so a repeat press is instant, which is why there is a length cap — `max_seconds`, 60 by default. A longer file is refused rather than held in RAM. Anything FFmpeg reads works: mp3, wav, ogg, flac, m4a, aac, opus, wma.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `DANTE_SOUNDBOARD_ENABLED` | true | Set to `0` to remove it from the UI and the API entirely |
+| `DANTE_SOUNDBOARD_PATH` | `./data/sounds` | Where the pads are read from |
+
 ### Tuning latency
 
 A pipe producer is held back by backpressure rather than paced by a network, so it keeps its queue full — the queue cap, not the prebuffer, is what you hear. These override the config for every source zone, so they can be tuned from the compose file without editing a mounted `config.yaml`:
@@ -215,19 +239,19 @@ A pipe producer is held back by backpressure rather than paced by a network, so 
 |---|---|---|
 | `DANTE_SOURCE_BUFFER_MS` | 2× prebuffer | Queue cap. The largest single contributor |
 | `DANTE_SOURCE_PREBUFFER_MS` | 1000 | Fill level before a zone starts delivering |
-
-The two source values are defaults for zones that state nothing; a zone with its own `prebuffer_ms` or `buffer_ms` keeps them. Sources differ: an interactive producer wants the shortest buffer it can hold, while a radio wants a deep one because latency does not matter and its clock is its own.
 | `DANTE_ALSA_BUFFER_US` | 250000 | ALSA playback buffer, all zones |
 | `DANTE_FIFO_BYTES` | 16384 | Kernel buffer behind a source FIFO |
+
+The two source values are defaults for zones that state nothing; a zone with its own `prebuffer_ms` or `buffer_ms` keeps them. Sources differ: an interactive producer wants the shortest buffer it can hold, while a radio wants a deep one because latency does not matter and its clock is its own.
 
 Start with `DANTE_SOURCE_BUFFER_MS`. Lowering the others trades margin for responsiveness, and `[Audio Health]` in the log counts the resulting holes once a minute — no output means none. Spotify Connect will not go below a few hundred milliseconds regardless, since librespot decodes ahead and exposes no control over it.
 
 ### Pointing at your config
 
-The compose files default to `../config.yaml`, which is relative to **the compose file**, so it resolves to the repository root. If you copy a compose file somewhere else, set `DANTE_CONFIG` to match:
+The compose files default to `./config.yaml`, which is relative to **the compose file**, not to your shell. If you keep your config somewhere else, set `DANTE_CONFIG` to match:
 
 ```bash
-DANTE_CONFIG=./config.yaml docker compose up -d
+DANTE_CONFIG=../config.yaml docker compose up -d
 ```
 
 Get this wrong and there is no friendly error: Docker silently creates a *directory* at a bind source that does not exist, and the player logs `Could not read config file ...: is a directory`. Delete the stray directory before retrying.

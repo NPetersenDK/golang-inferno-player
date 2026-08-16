@@ -109,6 +109,80 @@ body {
   border-color: var(--bs-primary);
 }
 
+/* Soundboard Pads */
+.sound-pad {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 64px;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.375rem;
+  background-color: var(--bs-body-bg);
+  color: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  text-align: center;
+  transition: transform 0.05s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.sound-pad:hover {
+  border-color: var(--bs-primary);
+  background-color: var(--bs-tertiary-bg);
+}
+
+/* Pressing a pad that is already sounding layers another copy, so the press
+   has to read as a hit rather than a toggle. */
+.sound-pad:active {
+  transform: scale(0.97);
+  border-color: var(--bs-primary);
+}
+
+.sound-pad-active {
+  border-color: var(--bs-success);
+  box-shadow: inset 0 0 0 1px var(--bs-success);
+}
+
+.sound-pad-name {
+  max-width: 100%;
+}
+
+.sound-pad-count {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 0.6rem;
+}
+
+/* One row per sounding voice */
+.playing-sound {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  margin-bottom: 0.25rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.375rem;
+  background-color: var(--bs-body-bg);
+}
+
+.playing-sound-bar {
+  width: 90px;
+  height: 4px;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.playing-sound-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--bs-success);
+  transition: width 0.1s linear;
+}
+
 /* Range input style */
 .form-range::-webkit-slider-thumb {
   background: var(--bs-primary);

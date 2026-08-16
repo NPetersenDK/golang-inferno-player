@@ -7,13 +7,19 @@ let stationsList = [];
 let activeZoneId = 1;
 let currentCategory = "all";
 let searchQuery = "";
+let soundSearchQuery = "";
+let activePanel = "radio";
 let sseSource = null;
 
-// Zone cards are built once and then updated in place. Rebuilding them on every
-// state event replaces the element under the pointer, which makes buttons jump,
-// the cursor flicker and a volume drag snap back mid-gesture.
+// Everything here is built once and then updated in place. The server
+// broadcasts ten times a second, so rebuilding replaces the element under the
+// pointer: buttons jump, the cursor flickers and a drag snaps back mid-gesture.
 const zoneNodes = new Map();
+const soundNodes = new Map();
+const voiceNodes = new Map();
 let zoneDropdownSignature = "";
+let soundGridSignature = "";
+let voiceListSignature = "";
 
 // DOM Elements
 const zonesList = document.getElementById("zonesList");
@@ -27,6 +33,11 @@ const danteDeviceText = document.getElementById("danteDeviceText");
 const activeZonesCount = document.getElementById("activeZonesCount");
 const stopAllBtn = document.getElementById("stopAllBtn");
 const customStreamForm = document.getElementById("customStreamForm");
+const sourceTabs = document.getElementById("sourceTabs");
+const soundsGrid = document.getElementById("soundsGrid");
+const playingSounds = document.getElementById("playingSounds");
+const soundSearchInput = document.getElementById("soundSearchInput");
+const stopSoundsBtn = document.getElementById("stopSoundsBtn");
 
 document.addEventListener("DOMContentLoaded", () => {
   initSSE();
@@ -59,6 +70,24 @@ function setupEventListeners() {
     fetch("/api/stop-all", { method: "POST" });
   });
 
+  sourceTabs.addEventListener("click", (e) => {
+    const btn = e.target.closest(".nav-link");
+    if (btn) showPanel(btn.dataset.panel);
+  });
+
+  soundSearchInput.addEventListener("input", (e) => {
+    soundSearchQuery = e.target.value.toLowerCase().trim();
+    renderSoundsGrid(true);
+  });
+
+  stopSoundsBtn.addEventListener("click", () => {
+    fetch("/api/soundboard/stop-all", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+  });
+
   customStreamForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const zoneId = parseInt(modalZoneSelect.value, 10) || activeZoneId;
@@ -89,6 +118,7 @@ function initSSE() {
       systemState = JSON.parse(event.data);
       updateHeader();
       renderTuner();
+      renderSoundboard();
       renderZones();
     } catch (err) {
       console.error("SSE parse error:", err);
@@ -171,49 +201,66 @@ function renderCategoryPills() {
   categoryNav.innerHTML = html;
 }
 
-// The tuner is an opt-in feature: with it disabled the server reports
-// enabled:false and nothing is drawn at all.
+// Both the tuner and the soundboard are opt-in: with one disabled the server
+// reports enabled:false, its tab never appears and its panel is never drawn.
+function showPanel(name) {
+  activePanel = name;
+  sourceTabs.querySelectorAll(".nav-link").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.panel === name);
+  });
+  ["radio", "fm", "soundboard"].forEach(panel => {
+    const el = document.getElementById(`panel-${panel}`);
+    if (el) el.hidden = panel !== name;
+  });
+}
+
+// setTabEnabled hides a tab whose feature is off, and falls back to the radio
+// panel if that tab was the one being looked at.
+function setTabEnabled(tabId, enabled, panel) {
+  const tab = document.getElementById(tabId);
+  if (!tab || tab.hidden === !enabled) return;
+  tab.hidden = !enabled;
+  if (!enabled && activePanel === panel) showPanel("radio");
+}
+
 function renderTuner() {
-  const panel = document.getElementById("tunerPanel");
+  const panel = document.getElementById("panel-fm");
   if (!panel) return;
 
   const tuner = systemState.tuner;
-  if (!tuner || !tuner.enabled) {
-    panel.hidden = true;
-    return;
-  }
+  setTabEnabled("tabFm", !!(tuner && tuner.enabled), "fm");
+  if (!tuner || !tuner.enabled) return;
 
   const signature = JSON.stringify(tuner);
   if (panel.dataset.signature === signature) return;
   panel.dataset.signature = signature;
-  panel.hidden = false;
 
   const mhz = tuner.frequency_hz ? (tuner.frequency_hz / 1e6).toFixed(1) : null;
   const status = tuner.error
     ? `<span class="text-danger">${escapeHtml(tuner.error)}</span>`
     : tuner.tuned
-      ? `Tuned to ${mhz} MHz`
-      : "Off";
+      ? `<span class="text-success">Tuned to ${mhz} MHz</span>`
+      : `<span class="text-muted">Off</span>`;
 
   const presets = (tuner.presets || []).map(p => `
-    <button class="btn btn-sm ${p.id === tuner.preset_id ? "btn-primary" : "btn-outline-secondary"} py-0 px-2 js-preset"
-            data-preset="${escapeHtml(p.id)}" style="font-size: 0.75rem;">
+    <button class="btn btn-sm ${p.id === tuner.preset_id ? "btn-primary" : "btn-outline-secondary"} js-preset"
+            data-preset="${escapeHtml(p.id)}">
       ${escapeHtml(p.name)}
     </button>`).join("");
 
   panel.innerHTML = `
-    <div class="card-body p-2 border-bottom">
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <span class="fw-semibold small"><i class="fa-solid fa-tower-broadcast me-1"></i> Radio</span>
-        <span class="text-muted" style="font-size: 0.7rem;">${status}</span>
-      </div>
-      <div class="d-flex flex-wrap gap-1 mb-2">${presets}</div>
-      <div class="d-flex gap-1">
-        <input type="number" class="form-control form-control-sm js-freq" step="0.1" min="87.5" max="108"
-               placeholder="MHz" value="${mhz || ""}" style="font-size: 0.75rem;">
-        <button class="btn btn-sm btn-outline-primary py-0 px-2 js-tune" style="font-size: 0.75rem;">Tune</button>
-        <button class="btn btn-sm btn-outline-danger py-0 px-2 js-off" style="font-size: 0.75rem;">Off</button>
-      </div>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <span class="fw-semibold"><i class="fa-solid fa-tower-broadcast me-1"></i> FM Tuner</span>
+      <span class="small">${status}</span>
+    </div>
+
+    <div class="d-flex flex-wrap gap-2 mb-3">${presets || '<span class="text-muted small">No presets configured.</span>'}</div>
+
+    <div class="d-flex gap-2" style="max-width: 360px;">
+      <input type="number" class="form-control form-control-sm js-freq" step="0.1" min="87.5" max="108"
+             placeholder="MHz" value="${mhz || ""}">
+      <button class="btn btn-sm btn-outline-primary text-nowrap js-tune">Tune</button>
+      <button class="btn btn-sm btn-outline-danger js-off">Off</button>
     </div>`;
 
   panel.querySelectorAll(".js-preset").forEach(btn => {
@@ -234,6 +281,143 @@ function tune(body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
+}
+
+function renderSoundboard() {
+  const sb = systemState.soundboard;
+  setTabEnabled("tabSoundboard", !!(sb && sb.enabled), "soundboard");
+  if (!sb || !sb.enabled) return;
+
+  renderSoundsGrid(false);
+  renderPlaying(sb.playing || []);
+}
+
+// The pad grid only changes when the directory does, so it is rebuilt on a
+// signature. The per-pad counter changes constantly and is written in place.
+function renderSoundsGrid(force) {
+  const sb = systemState.soundboard || {};
+  const sounds = (sb.sounds || []).filter(s =>
+    !soundSearchQuery || s.name.toLowerCase().includes(soundSearchQuery)
+  );
+
+  const signature = `${sounds.map(s => s.id).join("|")}#${sb.error || ""}#${sb.path || ""}`;
+  if (force || signature !== soundGridSignature) {
+    soundGridSignature = signature;
+    buildSoundsGrid(sounds, sb);
+  }
+
+  const counts = new Map();
+  (sb.playing || []).forEach(v => counts.set(v.sound_id, (counts.get(v.sound_id) || 0) + 1));
+
+  soundNodes.forEach((refs, id) => {
+    // One copy is already shown by the pad lighting up; the badge only earns
+    // its place once the same sound is layered over itself.
+    const n = counts.get(id) || 0;
+    refs.root.classList.toggle("sound-pad-active", n > 0);
+    refs.count.hidden = n < 2;
+    setText(refs.count, n > 1 ? `${n}x` : "");
+  });
+}
+
+function buildSoundsGrid(sounds, sb) {
+  soundsGrid.innerHTML = "";
+  soundNodes.clear();
+
+  if (sb.error) {
+    soundsGrid.innerHTML = `
+      <div class="col-12 text-center text-muted py-5">
+        <p class="mb-1"><i class="fa-solid fa-triangle-exclamation me-1"></i> ${escapeHtml(sb.error)}</p>
+      </div>`;
+    return;
+  }
+
+  if (sounds.length === 0) {
+    soundsGrid.innerHTML = `
+      <div class="col-12 text-center text-muted py-5">
+        <p class="mb-1"><i class="fa-solid fa-folder-open me-1"></i> No sounds found.</p>
+        <small class="opacity-75">Drop audio files into <code>${escapeHtml(sb.path || "the sounds directory")}</code> — they appear here without a restart.</small>
+      </div>`;
+    return;
+  }
+
+  sounds.forEach(snd => {
+    const col = document.createElement("div");
+    col.className = "col-6 col-md-4 col-xl-3";
+    col.innerHTML = `
+      <button class="sound-pad w-100">
+        <span class="sound-pad-name text-truncate">${escapeHtml(snd.name)}</span>
+        <span class="badge text-bg-success sound-pad-count js-count" hidden></span>
+      </button>`;
+
+    const root = col.querySelector(".sound-pad");
+    root.title = snd.duration_ms ? `${snd.name} (${(snd.duration_ms / 1000).toFixed(1)}s)` : snd.name;
+    root.addEventListener("click", () => playSound(snd.id));
+
+    soundNodes.set(snd.id, { root, count: col.querySelector(".js-count") });
+    soundsGrid.appendChild(col);
+  });
+}
+
+// Each press layers another voice, so the same sound can appear here several
+// times over and each copy is stopped on its own.
+function renderPlaying(playing) {
+  const signature = playing.map(v => `${v.voice_id}:${v.name}`).join("|");
+  if (signature !== voiceListSignature) {
+    voiceListSignature = signature;
+    playingSounds.innerHTML = "";
+    voiceNodes.clear();
+
+    playing.forEach(v => {
+      const row = document.createElement("div");
+      row.className = "playing-sound";
+      row.innerHTML = `
+        <button class="btn btn-sm btn-outline-danger py-0 px-2 js-stop" title="Stop this sound">
+          <i class="fa-solid fa-stop fa-xs"></i>
+        </button>
+        <span class="small text-truncate flex-grow-1">${escapeHtml(v.name)}</span>
+        <div class="playing-sound-bar"><div class="playing-sound-fill js-bar"></div></div>`;
+
+      row.querySelector(".js-stop").addEventListener("click", () => {
+        fetch("/api/soundboard/stop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ voice_id: v.voice_id })
+        });
+      });
+
+      voiceNodes.set(v.voice_id, { root: row, bar: row.querySelector(".js-bar") });
+      playingSounds.appendChild(row);
+    });
+  }
+
+  playing.forEach(v => {
+    const refs = voiceNodes.get(v.voice_id);
+    if (!refs) return;
+    const pct = v.length_ms ? Math.min(100, (v.position_ms / v.length_ms) * 100) : 0;
+    refs.bar.style.width = `${pct}%`;
+  });
+
+  stopSoundsBtn.disabled = playing.length === 0;
+}
+
+function playSound(soundId) {
+  fetch("/api/soundboard/play", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sound_id: soundId, zone_id: activeZoneId })
+  }).then(res => {
+    if (!res.ok) return res.text().then(showSoundboardMessage);
+  }).catch(err => showSoundboardMessage(String(err)));
+}
+
+let soundboardMessageTimer = null;
+function showSoundboardMessage(text) {
+  const box = document.getElementById("soundboardMsg");
+  if (!box) return;
+  box.textContent = text.trim();
+  box.hidden = false;
+  clearTimeout(soundboardMessageTimer);
+  soundboardMessageTimer = setTimeout(() => { box.hidden = true; }, 4000);
 }
 
 function renderZones() {

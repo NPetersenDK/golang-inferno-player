@@ -93,17 +93,59 @@ type TunerConfig struct {
 	Presets []TunerPreset `json:"presets,omitempty" yaml:"presets,omitempty"`
 }
 
+// SoundboardConfig points at a directory of sound files. The directory is read
+// when the list is requested rather than cached at startup, so dropping a file
+// in makes it playable without a restart.
+type SoundboardConfig struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// Path defaults to a "sounds" directory under DataDir.
+	Path string `json:"path,omitempty" yaml:"path,omitempty"`
+	// MaxSeconds caps how long a single sound may be. Sounds are decoded whole
+	// and held in memory so a repeat press costs nothing, which only works while
+	// they stay short.
+	MaxSeconds int `json:"max_seconds,omitempty" yaml:"max_seconds,omitempty"`
+}
+
 type AppConfig struct {
-	HTTPPort   int             `json:"http_port" yaml:"http_port"`
-	PipeDir    string          `json:"pipe_dir" yaml:"pipe_dir"`
-	DanteName  string          `json:"dante_name" yaml:"dante_name"`
-	SampleRate int             `json:"sample_rate" yaml:"sample_rate"`
-	DataDir    string          `json:"data_dir,omitempty" yaml:"data_dir,omitempty"`
-	Tuner      *TunerConfig    `json:"tuner,omitempty" yaml:"tuner,omitempty"`
-	Zones      []ZoneConfig    `json:"zones" yaml:"zones"`
-	Stations   []StationPreset `json:"stations" yaml:"stations"`
-	Presets    []StationPreset `json:"presets,omitempty" yaml:"presets,omitempty"` // backward compat
-	mu         sync.RWMutex    `json:"-" yaml:"-"`
+	HTTPPort   int               `json:"http_port" yaml:"http_port"`
+	PipeDir    string            `json:"pipe_dir" yaml:"pipe_dir"`
+	DanteName  string            `json:"dante_name" yaml:"dante_name"`
+	SampleRate int               `json:"sample_rate" yaml:"sample_rate"`
+	DataDir    string            `json:"data_dir,omitempty" yaml:"data_dir,omitempty"`
+	Tuner      *TunerConfig      `json:"tuner,omitempty" yaml:"tuner,omitempty"`
+	Soundboard *SoundboardConfig `json:"soundboard,omitempty" yaml:"soundboard,omitempty"`
+	Zones      []ZoneConfig      `json:"zones" yaml:"zones"`
+	Stations   []StationPreset   `json:"stations" yaml:"stations"`
+	Presets    []StationPreset   `json:"presets,omitempty" yaml:"presets,omitempty"` // backward compat
+	mu         sync.RWMutex      `json:"-" yaml:"-"`
+}
+
+// SoundboardSettings returns the soundboard configuration with defaults filled
+// in, or nil when it is switched off.
+func (c *AppConfig) SoundboardSettings() *SoundboardConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	sb := c.Soundboard
+	if sb == nil {
+		sb = &SoundboardConfig{Enabled: true}
+	}
+	if !sb.Enabled {
+		return nil
+	}
+
+	out := *sb
+	if out.Path == "" {
+		dataDir := c.DataDir
+		if dataDir == "" {
+			dataDir = "./data"
+		}
+		out.Path = filepath.Join(dataDir, "sounds")
+	}
+	if out.MaxSeconds <= 0 {
+		out.MaxSeconds = 60
+	}
+	return &out
 }
 
 // applyDefaults fills in the raw PCM layout a producer is assumed to write.
@@ -250,6 +292,20 @@ func (c *AppConfig) applyEnvOverrides() {
 			c.Tuner = &TunerConfig{}
 		}
 		c.Tuner.Enabled = on
+	}
+
+	if v := os.Getenv("DANTE_SOUNDBOARD_ENABLED"); v != "" {
+		on := v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+		if c.Soundboard == nil {
+			c.Soundboard = &SoundboardConfig{}
+		}
+		c.Soundboard.Enabled = on
+	}
+	if dir := os.Getenv("DANTE_SOUNDBOARD_PATH"); dir != "" {
+		if c.Soundboard == nil {
+			c.Soundboard = &SoundboardConfig{Enabled: true}
+		}
+		c.Soundboard.Path = dir
 	}
 
 	// Latency defaults for source zones, so they can be tuned from the compose

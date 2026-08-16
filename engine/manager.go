@@ -17,15 +17,16 @@ import (
 )
 
 type SystemStatus struct {
-	DanteDevice   string      `json:"dante_device"`
-	DanteChannels int         `json:"dante_channels"`
-	SampleRate    int         `json:"sample_rate"`
-	ClockStatus   string      `json:"clock_status"`
-	PTPStatus     string      `json:"ptp_status"`
-	PTP           PTPStats    `json:"ptp"`
-	Tuner         TunerState  `json:"tuner"`
-	ActiveStreams int         `json:"active_streams"`
-	Zones         []ZoneState `json:"zones"`
+	DanteDevice   string          `json:"dante_device"`
+	DanteChannels int             `json:"dante_channels"`
+	SampleRate    int             `json:"sample_rate"`
+	ClockStatus   string          `json:"clock_status"`
+	PTPStatus     string          `json:"ptp_status"`
+	PTP           PTPStats        `json:"ptp"`
+	Tuner         TunerState      `json:"tuner"`
+	Soundboard    SoundboardState `json:"soundboard"`
+	ActiveStreams int             `json:"active_streams"`
+	Zones         []ZoneState     `json:"zones"`
 }
 
 type PlaybackManager struct {
@@ -39,6 +40,7 @@ type PlaybackManager struct {
 	ptp        *PTPMonitor
 	discipline *ClockDiscipline
 	tuner      *Tuner
+	soundboard *Soundboard
 }
 
 func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
@@ -65,13 +67,16 @@ func NewPlaybackManager(cfg *config.AppConfig) *PlaybackManager {
 		}
 	}
 
-	// nil unless explicitly enabled, and every call on it is nil-safe.
-	mgr.tuner = NewTuner(cfg, func() {
+	notify := func() {
 		select {
 		case stateChan <- struct{}{}:
 		default:
 		}
-	})
+	}
+
+	// Both are nil unless enabled, and every call on them is nil-safe.
+	mgr.tuner = NewTuner(cfg, notify)
+	mgr.soundboard = NewSoundboard(cfg, notify)
 
 	// Measure the Dante grandmaster passively, then serve the resulting media
 	// clock to Inferno on both socket paths it may look for.
@@ -161,7 +166,7 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 		// Launch aplay with 250ms buffer to prevent underruns
 		cmd := exec.Command("aplay", "-D", "inferno", "-t", "raw", "-f", "S32_LE", "-r", "48000", "-c", strconv.Itoa(numChannels),
 			fmt.Sprintf("--buffer-time=%d", alsaBufferMicros()), "-")
-		
+
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			log.Printf("[Dante Master] Notice: Could not open aplay stdin: %v. Running in emulation mode.", err)
@@ -217,12 +222,12 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 					continue
 				}
 
+				// Slot into channels: Left = zoneIdx*2, Right = zoneIdx*2 + 1
+				chL := zoneIdx * 2
+				chR := zoneIdx*2 + 1
+
 				samples, hasAudio := player.PullSamples(framesPerTick)
 				if hasAudio && len(samples) > 0 {
-					// Slot into channels: Left = zoneIdx*2, Right = zoneIdx*2 + 1
-					chL := zoneIdx * 2
-					chR := zoneIdx * 2 + 1
-
 					numStereo := len(samples) / 2
 					for f := 0; f < numStereo && f < framesPerTick; f++ {
 						frameOffset := f * numChannels * 4
@@ -232,6 +237,10 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 						binary.LittleEndian.PutUint32(masterBuf[frameOffset+chR*4:frameOffset+(chR+1)*4], uint32(samples[f*2+1]))
 					}
 				}
+
+				// Pads sit on top of whatever the zone is playing, so a sound can
+				// fire over a station without interrupting it.
+				m.soundboard.MixInto(zoneID, masterBuf, chL, chR, numChannels, framesPerTick, player.GainFactor())
 			}
 			m.mu.RUnlock()
 
@@ -336,11 +345,44 @@ func (m *PlaybackManager) StopZone(zoneID int) error {
 }
 
 func (m *PlaybackManager) StopAll() {
+	m.soundboard.StopAll(0)
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, z := range m.zones {
 		z.Stop()
 	}
+}
+
+// PlaySound layers a pad on top of whatever a zone is playing and returns the
+// voice ID, so the same sound can be fired repeatedly and stopped individually.
+// Source zones are off limits for the same reason stations are: they belong to
+// their producer.
+func (m *PlaybackManager) PlaySound(soundID string, zoneID int) (int, error) {
+	z, err := m.GetZone(zoneID)
+	if err != nil {
+		return 0, err
+	}
+	if z.IsSource() {
+		return 0, fmt.Errorf("zone %d is a %s source and cannot play sounds", zoneID, z.GetState().SourceLabel)
+	}
+	return m.soundboard.Play(soundID, zoneID)
+}
+
+func (m *PlaybackManager) StopSound(voiceID int) error {
+	if !m.soundboard.StopVoice(voiceID) {
+		return fmt.Errorf("voice %d is not playing", voiceID)
+	}
+	return nil
+}
+
+// StopSounds silences the soundboard. A zoneID of zero covers every zone.
+func (m *PlaybackManager) StopSounds(zoneID int) {
+	m.soundboard.StopAll(zoneID)
+}
+
+func (m *PlaybackManager) SoundboardState() SoundboardState {
+	return m.soundboard.State()
 }
 
 func (m *PlaybackManager) SetZoneVolume(zoneID int, volume int) error {
@@ -380,12 +422,13 @@ func (m *PlaybackManager) GetStatus() SystemStatus {
 
 	return SystemStatus{
 		DanteDevice:   m.cfg.DanteName,
-		DanteChannels: 8,
+		DanteChannels: danteTXChannels(),
 		SampleRate:    m.cfg.SampleRate,
 		ClockStatus:   clockStatus,
 		PTPStatus:     ptpStatus,
 		PTP:           stats,
 		Tuner:         m.tuner.State(),
+		Soundboard:    m.soundboard.State(),
 		ActiveStreams: active,
 		Zones:         zones,
 	}

@@ -550,6 +550,17 @@ func (z *ZonePlayer) PullSamples(numFrames int) ([]int32, bool) {
 	return samples, true
 }
 
+// GainFactor is the zone's volume as a multiplier, zero while muted. Anything
+// mixed on top of the zone applies it too, so muting a zone silences all of it.
+func (z *ZonePlayer) GainFactor() float64 {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+	if z.muted {
+		return 0
+	}
+	return float64(z.volume) / 100.0
+}
+
 // StarvationCount is the number of times the queue ran dry since start, i.e.
 // how many 20 ms holes were mixed into the Dante stream.
 func (z *ZonePlayer) StarvationCount() uint64 {

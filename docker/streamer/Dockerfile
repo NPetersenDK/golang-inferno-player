@@ -106,6 +106,10 @@ ENV INFERNO_NAME="Dante-Pi"
 ENV DANTE_TX_CHANNELS=8
 ENV HTTP_PORT=8085
 
+# Relative paths in config.yaml, data_dir and the soundboard among them, resolve
+# against this rather than against /.
+WORKDIR /opt/dante-player
+
 EXPOSE 8085
 VOLUME ["/root/.local/state/inferno_aoip", "/opt/dante-player/data"]
 

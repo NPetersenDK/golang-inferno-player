@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -15,10 +16,10 @@ import (
 )
 
 type Server struct {
-	cfg     *config.AppConfig
-	mgr     *engine.PlaybackManager
-	webFS   fs.FS
-	mux     *http.ServeMux
+	cfg   *config.AppConfig
+	mgr   *engine.PlaybackManager
+	webFS fs.FS
+	mux   *http.ServeMux
 }
 
 type PlayRequest struct {
@@ -51,6 +52,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/zones/", s.handleZoneAction)
 	s.mux.HandleFunc("/api/stop-all", s.handleStopAll)
 	s.mux.HandleFunc("/api/tuner/", s.handleTuner)
+	s.mux.HandleFunc("/api/soundboard", s.handleSoundboard)
+	s.mux.HandleFunc("/api/soundboard/", s.handleSoundboardAction)
 	s.mux.HandleFunc("/api/events", s.handleSSE)
 
 	// Web UI static files
@@ -267,6 +270,79 @@ func (s *Server) handleTuner(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "action": action})
+}
+
+type SoundRequest struct {
+	SoundID string `json:"sound_id,omitempty"`
+	ZoneID  int    `json:"zone_id,omitempty"`
+	VoiceID int    `json:"voice_id,omitempty"`
+}
+
+// The sound list and what is currently playing also ride along in /api/status;
+// this endpoint exists so a controller can poll the soundboard on its own.
+func (s *Server) handleSoundboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.mgr.SoundboardState())
+}
+
+func (s *Server) handleSoundboardAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	action := strings.TrimPrefix(r.URL.Path, "/api/soundboard/")
+
+	var req SoundRequest
+	// stop-all takes no body, so an empty one is not an error.
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	switch action {
+	case "play":
+		if req.SoundID == "" {
+			http.Error(w, "sound_id required", http.StatusBadRequest)
+			return
+		}
+		voiceID, err := s.mgr.PlaySound(req.SoundID, req.ZoneID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": true, "sound_id": req.SoundID, "zone": req.ZoneID, "voice_id": voiceID,
+		})
+
+	case "stop":
+		if req.VoiceID == 0 {
+			http.Error(w, "voice_id required", http.StatusBadRequest)
+			return
+		}
+		if err := s.mgr.StopSound(req.VoiceID); err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "voice_id": req.VoiceID})
+
+	case "stop-all":
+		// Zero means every zone.
+		s.mgr.StopSounds(req.ZoneID)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "action": "stop_all", "zone": req.ZoneID})
+
+	default:
+		http.Error(w, "Unknown action", http.StatusNotFound)
+	}
 }
 
 func (s *Server) handleStopAll(w http.ResponseWriter, r *http.Request) {

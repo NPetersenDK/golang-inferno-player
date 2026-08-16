@@ -37,7 +37,10 @@ services:
       # Default is relative to this file, not your shell. Set DANTE_CONFIG when
       # copying this file elsewhere - a wrong path makes Docker create a
       # directory rather than fail.
-      - ./config.yaml:/opt/dante-player/config.yaml:ro
+      - ${DANTE_CONFIG:-./config.yaml}:/opt/dante-player/config.yaml:ro
+      # Soundboard pads. Drop audio files in here and they show up in the UI
+      # without a restart. Remove this line to switch the soundboard off.
+      - ./sounds:/opt/dante-player/data/sounds
       # Keeps Dante Controller routing across restarts.
       - dante_state:/root/.local/state/inferno_aoip
       - /dev/shm:/dev/shm
