@@ -1,13 +1,5 @@
 # syntax=docker/dockerfile:1
-# Dante Audio Hub. Build context is the repository root, not this directory:
-#   docker build -f docker/streamer/Dockerfile .
-#
-# The Go player and the Inferno ALSA module are cross-compiled on the build
-# platform, so only the Debian runtime stage runs under emulation.
-
-# ------------------------------------------------------------------------------
-# Stage 1: Dante Web Player (Go)
-# ------------------------------------------------------------------------------
+# Build context is the repository root:  docker build -f docker/streamer/Dockerfile .
 FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS go-builder
 ARG TARGETOS
 ARG TARGETARCH
@@ -19,9 +11,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/dante-player .
 
-# ------------------------------------------------------------------------------
-# Stage 2: Shared Rust cross-compilation base, so apt runs only once
-# ------------------------------------------------------------------------------
+# Shared Rust base so the apt install runs once, not per Rust stage.
 FROM --platform=$BUILDPLATFORM rust:1-slim-bookworm AS rust-base
 ARG TARGETARCH
 
@@ -49,14 +39,11 @@ ENV CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
 ENV CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
 ENV PKG_CONFIG_PATH_aarch64_unknown_linux_gnu=/usr/lib/aarch64-linux-gnu/pkgconfig
 ENV PKG_CONFIG_ALLOW_CROSS=1
-# Parallel codegen, no whole-program LTO, stripped: build time over runtime speed.
+# Build time favoured over runtime speed.
 ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
 ENV CARGO_PROFILE_RELEASE_LTO=off
 ENV CARGO_PROFILE_RELEASE_STRIP=symbols
 
-# ------------------------------------------------------------------------------
-# Stage 3: Upstream Inferno ALSA module
-# ------------------------------------------------------------------------------
 FROM rust-base AS inferno-builder
 ARG TARGETARCH
 
@@ -64,8 +51,18 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     git clone --depth 1 --recurse-submodules --shallow-submodules -b dev https://github.com/teodly/inferno /build/inferno && \
     cd /build/inferno && \
-    sed -i '/add_txt_truncated("")/d' inferno_aoip/src/device_server/mdns_server.rs && \
-    sed -i 's/async fn send_heartbeat(&mut self) {/async fn send_heartbeat(\&mut self) { return;/' inferno_aoip/src/device_server/info_mcast_server.rs && \
+    # sed exits 0 when nothing matched, so every patch is grep-verified: a silent
+    # no-op would only surface as odd Dante behaviour days later.
+    MDNS=inferno_aoip/src/device_server/mdns_server.rs && \
+    MCAST=inferno_aoip/src/device_server/info_mcast_server.rs && \
+    grep -q 'add_txt_truncated("")' "$MDNS" && \
+    sed -i '/add_txt_truncated("")/d' "$MDNS" && \
+    # The heartbeat to 224.0.0.233:8708 degrades and eventually kills an Apollo
+    # E1X on the same segment. Device info on 224.0.0.231:8702 is untouched, so
+    # Dante Controller still works.
+    grep -q 'async fn send_heartbeat(&mut self) {$' "$MCAST" && \
+    sed -i 's/async fn send_heartbeat(&mut self) {$/async fn send_heartbeat(\&mut self) { return;/' "$MCAST" && \
+    grep -q 'send_heartbeat(&mut self) { return;' "$MCAST" && \
     if [ "$TARGETARCH" = "arm64" ]; then \
       RUSTFLAGS="-C target-feature=-crt-static" cargo build --release --target=aarch64-unknown-linux-gnu -p alsa_pcm_inferno && \
       mkdir -p /out && cp target/aarch64-unknown-linux-gnu/release/libasound_module_pcm_inferno.so /out/; \
@@ -74,9 +71,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       mkdir -p /out && cp target/release/libasound_module_pcm_inferno.so /out/; \
     fi
 
-# ------------------------------------------------------------------------------
-# Stage 4: Runtime. No PTP daemon: dante-player measures the grandmaster itself.
-# ------------------------------------------------------------------------------
+# Runtime. No PTP daemon: dante-player measures the grandmaster itself.
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -91,7 +86,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rtl-sdr \
     && rm -rf /var/lib/apt/lists/*
 
-# The alsa-lib plugin directory is multiarch-specific, so ask dpkg where it is.
+# Plugin dir is multiarch-specific, so ask dpkg rather than hardcode it.
 COPY --from=inferno-builder /out/libasound_module_pcm_inferno.so /tmp/libasound_module_pcm_inferno.so
 RUN ALSA_DIR=$(dpkg -L libasound2 | grep -m1 'libasound\.so\.2$' | xargs dirname)/alsa-lib && \
     mkdir -p "$ALSA_DIR" && \
@@ -101,15 +96,14 @@ RUN ALSA_DIR=$(dpkg -L libasound2 | grep -m1 'libasound\.so\.2$' | xargs dirname
 COPY --from=go-builder /out/dante-player /usr/local/bin/
 
 COPY docker/streamer/asound.conf /etc/asound.conf
-# --chmod avoids a separate RUN layer, which on arm64 would run under emulation
+# --chmod avoids a RUN layer, which on arm64 would run under emulation.
 COPY --chmod=0755 docker/streamer/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 ENV INFERNO_NAME="Dante-Pi"
 ENV DANTE_TX_CHANNELS=8
 ENV HTTP_PORT=8085
 
-# Relative paths in config.yaml, data_dir and the soundboard among them, resolve
-# against this rather than against /.
+# Relative paths in config.yaml resolve against this, not against /.
 WORKDIR /opt/dante-player
 
 EXPOSE 8085
