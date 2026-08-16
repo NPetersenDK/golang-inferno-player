@@ -3,3 +3,8 @@ dante-player.exe
 dante-player-arm64
 data/
 config.yaml
+node_modules/
+bitfocus/node_modules/
+bitfocus/pkg/
+bitfocus/*.tgz
+

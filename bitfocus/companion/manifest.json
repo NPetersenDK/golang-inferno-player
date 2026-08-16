@@ -1,4 +1,5 @@
 {
+  "type": "connection",
   "id": "dante-streamer",
   "name": "Dante Streamer Soundboard",
   "shortname": "Dante Sound",
@@ -14,9 +15,9 @@
   ],
   "legacyIds": [],
   "runtime": {
-    "type": "node18",
+    "type": "node22",
     "api": "nodejs-ipc",
-    "apiVersion": "1.8.0",
+    "apiVersion": "2.1.3",
     "entrypoint": "../main.js"
   },
   "manufacturer": "Custom",

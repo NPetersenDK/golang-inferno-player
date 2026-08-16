@@ -4,7 +4,7 @@
   "description": "Bitfocus Companion module for Dante Streamer soundboard and zone control",
   "main": "main.js",
   "scripts": {
-    "test": "echo \"No test specified\" && exit 0"
+    "build": "companion-module-build"
   },
   "keywords": [
     "companion-module",
@@ -15,6 +15,9 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@companion-module/base": "^1.8.0"
+    "@companion-module/base": "^2.0.0"
+  },
+  "devDependencies": {
+    "@companion-module/tools": "^3.0.0"
   }
 }

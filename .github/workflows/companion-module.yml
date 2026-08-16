@@ -25,21 +25,21 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: 'bitfocus/package.json'
 
       - name: Install dependencies
         working-directory: bitfocus
-        run: npm install --omit=dev
+        run: npm install
 
-      - name: Package module archive
+      - name: Build official Companion package
         working-directory: bitfocus
-        run: tar -czf ../companion-module-dante-streamer.tgz package.json main.js companion node_modules README.md
+        run: npx companion-module-build
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: companion-module-dante-streamer
-          path: companion-module-dante-streamer.tgz
+          path: bitfocus/*.tgz
           retention-days: 30
