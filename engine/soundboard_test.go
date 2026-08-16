@@ -13,7 +13,26 @@ import (
 const testChannels = 8
 
 func newTestBoard() *Soundboard {
-	return &Soundboard{cache: make(map[string]cachedSound)}
+	return &Soundboard{
+		cache:   make(map[string]cachedSound),
+		voices:  make(map[int]*voice),
+		warming: make(map[string]bool),
+	}
+}
+
+// seedSound writes a placeholder file and pre-fills the decode cache for it, so
+// Play works without FFmpeg.
+func seedSound(t *testing.T, sb *Soundboard, name string, samples []int32) {
+	t.Helper()
+	path := filepath.Join(sb.cfg.Path, name)
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sb.cache[name] = cachedSound{samples: samples, modTime: info.ModTime().UnixNano(), size: info.Size()}
 }
 
 // readFrame pulls one channel's sample out of the interleaved master buffer.
@@ -27,31 +46,77 @@ func makeMaster(frames int) []byte {
 	return make([]byte, frames*testChannels*4)
 }
 
-func TestMixIntoLayersRepeatsOfTheSameSound(t *testing.T) {
+func TestPlayReplacesTheCurrentSound(t *testing.T) {
 	sb := newTestBoard()
-	samples := []int32{100, 200, 300, 400}
-	sb.voices = []*voice{
-		{id: 1, soundID: "a", zoneID: 1, samples: samples},
-		{id: 2, soundID: "a", zoneID: 1, samples: samples},
+	sb.cfg = config.SoundboardConfig{Enabled: true, Path: t.TempDir(), MaxSeconds: 60}
+	seedSound(t, sb, "a.wav", []int32{100, 100})
+	seedSound(t, sb, "b.wav", []int32{200, 200})
+
+	first, err := sb.Play("a.wav", 1)
+	if err != nil {
+		t.Fatalf("Play(a) = %v", err)
+	}
+	second, err := sb.Play("b.wav", 1)
+	if err != nil {
+		t.Fatalf("Play(b) = %v", err)
 	}
 
-	master := makeMaster(2)
-	sb.MixInto(1, master, 0, 1, testChannels, 2, 1.0)
+	if len(sb.voices) != 1 {
+		t.Fatalf("voices = %d, want 1: a new pad replaces the old one", len(sb.voices))
+	}
+	if got := sb.voices[1].soundID; got != "b.wav" {
+		t.Errorf("sounding %q, want b.wav", got)
+	}
+	if sb.StopVoice(first) {
+		t.Error("the replaced voice is still stoppable, so it was never dropped")
+	}
+	if !sb.StopVoice(second) {
+		t.Error("the current voice should be stoppable")
+	}
+}
 
-	if got := readFrame(t, master, 0, 0); got != 200 {
-		t.Errorf("frame 0 left = %d, want 200 (two copies of 100)", got)
+func TestPlayRetriggerRestartsTheSameSound(t *testing.T) {
+	sb := newTestBoard()
+	sb.cfg = config.SoundboardConfig{Enabled: true, Path: t.TempDir(), MaxSeconds: 60}
+	seedSound(t, sb, "a.wav", []int32{10, 10, 20, 20})
+
+	if _, err := sb.Play("a.wav", 1); err != nil {
+		t.Fatalf("Play = %v", err)
 	}
-	if got := readFrame(t, master, 0, 1); got != 400 {
-		t.Errorf("frame 0 right = %d, want 400", got)
+	sb.MixInto(1, makeMaster(1), 0, 1, testChannels, 1, 1.0)
+
+	if _, err := sb.Play("a.wav", 1); err != nil {
+		t.Fatalf("Play again = %v", err)
 	}
-	if got := readFrame(t, master, 1, 0); got != 600 {
-		t.Errorf("frame 1 left = %d, want 600", got)
+	master := makeMaster(1)
+	sb.MixInto(1, master, 0, 1, testChannels, 1, 1.0)
+
+	if got := readFrame(t, master, 0, 0); got != 10 {
+		t.Errorf("frame = %d, want 10: retriggering restarts from the beginning", got)
+	}
+}
+
+func TestPlayIsPerZone(t *testing.T) {
+	sb := newTestBoard()
+	sb.cfg = config.SoundboardConfig{Enabled: true, Path: t.TempDir(), MaxSeconds: 60}
+	seedSound(t, sb, "a.wav", []int32{100, 100})
+	seedSound(t, sb, "b.wav", []int32{200, 200})
+
+	if _, err := sb.Play("a.wav", 1); err != nil {
+		t.Fatalf("Play zone 1 = %v", err)
+	}
+	if _, err := sb.Play("b.wav", 2); err != nil {
+		t.Fatalf("Play zone 2 = %v", err)
+	}
+
+	if len(sb.voices) != 2 {
+		t.Fatalf("voices = %d, want 2: replacing is per zone, not global", len(sb.voices))
 	}
 }
 
 func TestMixIntoAddsOnTopOfExistingAudio(t *testing.T) {
 	sb := newTestBoard()
-	sb.voices = []*voice{{id: 1, zoneID: 1, samples: []int32{50, 50}}}
+	sb.voices = map[int]*voice{1: {id: 1, zoneID: 1, samples: []int32{50, 50}}}
 
 	master := makeMaster(1)
 	// Pretend the zone already wrote a station into the buffer.
@@ -72,22 +137,22 @@ func TestMixIntoAddsOnTopOfExistingAudio(t *testing.T) {
 func TestMixIntoClipsInsteadOfWrapping(t *testing.T) {
 	sb := newTestBoard()
 	loud := int32(math.MaxInt32 - 10)
-	sb.voices = []*voice{
-		{id: 1, zoneID: 1, samples: []int32{loud, loud}},
-		{id: 2, zoneID: 1, samples: []int32{loud, loud}},
-	}
+	sb.voices = map[int]*voice{1: {id: 1, zoneID: 1, samples: []int32{loud, loud}}}
 
+	// A loud pad over loud music must distort at the ceiling, not tear through
+	// zero.
 	master := makeMaster(1)
+	binary.LittleEndian.PutUint32(master[0:4], uint32(loud))
 	sb.MixInto(1, master, 0, 1, testChannels, 1, 1.0)
 
 	if got := readFrame(t, master, 0, 0); got != math.MaxInt32 {
-		t.Errorf("left = %d, want MaxInt32: summing loud voices must saturate, not wrap", got)
+		t.Errorf("left = %d, want MaxInt32", got)
 	}
 }
 
 func TestMixIntoOnlyTouchesItsOwnZone(t *testing.T) {
 	sb := newTestBoard()
-	sb.voices = []*voice{{id: 1, zoneID: 2, samples: []int32{500, 500}}}
+	sb.voices = map[int]*voice{2: {id: 1, zoneID: 2, samples: []int32{500, 500}}}
 
 	master := makeMaster(1)
 	// Zone 1 occupies channels 0/1, zone 2 occupies 2/3.
@@ -105,7 +170,7 @@ func TestMixIntoOnlyTouchesItsOwnZone(t *testing.T) {
 
 func TestMixIntoAppliesZoneGain(t *testing.T) {
 	sb := newTestBoard()
-	sb.voices = []*voice{{id: 1, zoneID: 1, samples: []int32{1000, 1000}}}
+	sb.voices = map[int]*voice{1: {id: 1, zoneID: 1, samples: []int32{1000, 1000}}}
 
 	master := makeMaster(1)
 	sb.MixInto(1, master, 0, 1, testChannels, 1, 0.0)
@@ -118,7 +183,7 @@ func TestMixIntoAppliesZoneGain(t *testing.T) {
 func TestMixIntoRetiresFinishedVoices(t *testing.T) {
 	sb := newTestBoard()
 	// Two frames' worth of audio, consumed by a single four-frame pull.
-	sb.voices = []*voice{{id: 1, zoneID: 1, samples: []int32{1, 1, 2, 2}}}
+	sb.voices = map[int]*voice{1: {id: 1, zoneID: 1, samples: []int32{1, 1, 2, 2}}}
 
 	master := makeMaster(4)
 	sb.MixInto(1, master, 0, 1, testChannels, 4, 1.0)
@@ -133,7 +198,7 @@ func TestMixIntoRetiresFinishedVoices(t *testing.T) {
 
 func TestMixIntoAdvancesAcrossCalls(t *testing.T) {
 	sb := newTestBoard()
-	sb.voices = []*voice{{id: 1, zoneID: 1, samples: []int32{10, 10, 20, 20}}}
+	sb.voices = map[int]*voice{1: {id: 1, zoneID: 1, samples: []int32{10, 10, 20, 20}}}
 
 	first := makeMaster(1)
 	sb.MixInto(1, first, 0, 1, testChannels, 1, 1.0)
@@ -151,7 +216,7 @@ func TestMixIntoAdvancesAcrossCalls(t *testing.T) {
 func TestMixIntoReportsPeakSoTheMetersMove(t *testing.T) {
 	sb := newTestBoard()
 	half := int32(math.MaxInt32 / 2)
-	sb.voices = []*voice{{id: 1, zoneID: 1, samples: []int32{half, 0}}}
+	sb.voices = map[int]*voice{1: {id: 1, zoneID: 1, samples: []int32{half, 0}}}
 
 	peakL, peakR := sb.MixInto(1, makeMaster(1), 0, 1, testChannels, 1, 1.0)
 	if peakL < 0.49 || peakL > 0.51 {
@@ -161,7 +226,7 @@ func TestMixIntoReportsPeakSoTheMetersMove(t *testing.T) {
 		t.Errorf("peakR = %v, want 0: the right channel was silent", peakR)
 	}
 
-	sb.voices = nil
+	clear(sb.voices)
 	if l, r := sb.MixInto(1, makeMaster(1), 0, 1, testChannels, 1, 1.0); l != 0 || r != 0 {
 		t.Errorf("peaks = %v/%v with no voices, want 0/0", l, r)
 	}
@@ -170,7 +235,7 @@ func TestMixIntoReportsPeakSoTheMetersMove(t *testing.T) {
 func TestMixIntoPeakFollowsZoneGain(t *testing.T) {
 	sb := newTestBoard()
 	full := int32(math.MaxInt32)
-	sb.voices = []*voice{{id: 1, zoneID: 1, samples: []int32{full, full}}}
+	sb.voices = map[int]*voice{1: {id: 1, zoneID: 1, samples: []int32{full, full}}}
 
 	peakL, _ := sb.MixInto(1, makeMaster(1), 0, 1, testChannels, 1, 0.0)
 	if peakL != 0 {
@@ -178,30 +243,25 @@ func TestMixIntoPeakFollowsZoneGain(t *testing.T) {
 	}
 }
 
-func TestZoneSummaryCollapsesRepeats(t *testing.T) {
+func TestZoneSummaryNamesThePadPerZone(t *testing.T) {
 	sb := newTestBoard()
-	sb.voices = []*voice{
-		{id: 1, zoneID: 2, name: "Airhorn", samples: []int32{1}},
-		{id: 2, zoneID: 2, name: "Airhorn", samples: []int32{1}},
-		{id: 3, zoneID: 2, name: "Applause", samples: []int32{1}},
-		{id: 4, zoneID: 3, name: "Drumroll", samples: []int32{1}},
+	sb.voices = map[int]*voice{
+		2: {id: 1, zoneID: 2, name: "Airhorn", samples: []int32{1}},
+		3: {id: 2, zoneID: 3, name: "Drumroll", samples: []int32{1}},
 	}
 
 	summary := sb.ZoneSummary()
-	if got := summary[2].Count; got != 3 {
-		t.Errorf("zone 2 count = %d, want 3", got)
+	if got := summary[2]; got != "Airhorn" {
+		t.Errorf("zone 2 = %q, want Airhorn", got)
 	}
-	if got := summary[2].Label; got != "Airhorn x2, Applause" {
-		t.Errorf("zone 2 label = %q, want %q", got, "Airhorn x2, Applause")
-	}
-	if got := summary[3].Label; got != "Drumroll" {
-		t.Errorf("zone 3 label = %q, want %q", got, "Drumroll")
+	if got := summary[3]; got != "Drumroll" {
+		t.Errorf("zone 3 = %q, want Drumroll", got)
 	}
 	if _, ok := summary[1]; ok {
-		t.Error("zone 1 has no voices and should not appear in the summary")
+		t.Error("zone 1 has no pad and should not appear in the summary")
 	}
 
-	sb.voices = nil
+	clear(sb.voices)
 	if summary := sb.ZoneSummary(); summary != nil {
 		t.Errorf("ZoneSummary() = %v with nothing playing, want nil", summary)
 	}
@@ -209,13 +269,13 @@ func TestZoneSummaryCollapsesRepeats(t *testing.T) {
 
 func TestStopAllByZone(t *testing.T) {
 	sb := newTestBoard()
-	sb.voices = []*voice{
-		{id: 1, zoneID: 1, samples: []int32{1, 1}},
-		{id: 2, zoneID: 2, samples: []int32{1, 1}},
+	sb.voices = map[int]*voice{
+		1: {id: 1, zoneID: 1, samples: []int32{1, 1}},
+		2: {id: 2, zoneID: 2, samples: []int32{1, 1}},
 	}
 
 	sb.StopAll(1)
-	if len(sb.voices) != 1 || sb.voices[0].zoneID != 2 {
+	if len(sb.voices) != 1 || sb.voices[2] == nil {
 		t.Fatalf("voices = %+v, want only the zone 2 voice left", sb.voices)
 	}
 
@@ -227,7 +287,7 @@ func TestStopAllByZone(t *testing.T) {
 
 func TestStopVoiceReportsWhetherItWasPlaying(t *testing.T) {
 	sb := newTestBoard()
-	sb.voices = []*voice{{id: 7, zoneID: 1, samples: []int32{1, 1}}}
+	sb.voices = map[int]*voice{1: {id: 7, zoneID: 1, samples: []int32{1, 1}}}
 
 	if !sb.StopVoice(7) {
 		t.Error("StopVoice(7) = false, want true for a sounding voice")
@@ -263,14 +323,18 @@ func TestNilSoundboardIsInert(t *testing.T) {
 
 func TestListSkipsNonAudioAndSortsByName(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"Zebra.mp3", "alpha.wav", "notes.txt", "cover.jpg"} {
+	sb := newTestBoard()
+	sb.cfg = config.SoundboardConfig{Enabled: true, Path: dir, MaxSeconds: 60}
+
+	// Seeded rather than written raw, so the scan's background warm-up finds
+	// them cached and never reaches for FFmpeg.
+	seedSound(t, sb, "Zebra.mp3", []int32{1, 1})
+	seedSound(t, sb, "alpha.wav", []int32{1, 1})
+	for _, name := range []string{"notes.txt", "cover.jpg"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-
-	sb := newTestBoard()
-	sb.cfg = config.SoundboardConfig{Enabled: true, Path: dir, MaxSeconds: 60}
 
 	sounds := sb.List()
 	if len(sounds) != 2 {

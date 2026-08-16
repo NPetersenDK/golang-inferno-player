@@ -102,8 +102,8 @@ zones:
 #       frequency_hz: 96400000
 
 # Soundboard: every audio file in the directory becomes a pad, re-read as you go
-# so new files need no restart. Pads layer on top of the zone rather than
-# replacing it. Source zones cannot be targeted. On by default.
+# so new files need no restart. Pads play over the zone rather than replacing its
+# stream, one at a time per zone. Source zones cannot be targeted. On by default.
 # soundboard:
 #   enabled: true
 #   path: "./data/sounds"   # defaults to a "sounds" folder under data_dir

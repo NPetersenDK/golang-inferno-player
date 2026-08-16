@@ -19,10 +19,7 @@ import (
 
 // Decoded sounds are cached forever, which only stays affordable because
 // SoundboardConfig.MaxSeconds caps how long each one can be.
-const (
-	soundboardMaxVoices      = 16
-	soundboardBytesPerSecond = 48000 * 2 * 4
-)
+const soundboardBytesPerSecond = 48000 * 2 * 4
 
 var soundboardExtensions = map[string]bool{
 	".mp3": true, ".wav": true, ".ogg": true, ".flac": true,
@@ -35,7 +32,7 @@ type Sound struct {
 	DurationMs int    `json:"duration_ms,omitempty"`
 }
 
-// PlayingSound is one sounding pad; the same sound may appear several times.
+// PlayingSound is the pad a zone is sounding.
 type PlayingSound struct {
 	VoiceID  int    `json:"voice_id"`
 	SoundID  string `json:"sound_id"`
@@ -72,10 +69,12 @@ type Soundboard struct {
 	cfg    config.SoundboardConfig
 	notify func()
 
-	mu      sync.Mutex
-	cache   map[string]cachedSound
-	voices  []*voice
-	scratch []int32
+	mu    sync.Mutex
+	cache map[string]cachedSound
+	// One voice per zone: a new pad replaces the one before it.
+	voices map[int]*voice
+	// Decodes already in flight, so a rescan does not start them again.
+	warming map[string]bool
 	nextID  int
 	lastErr string
 
@@ -96,11 +95,57 @@ func NewSoundboard(cfg *config.AppConfig, notify func()) *Soundboard {
 		log.Printf("[Soundboard] Cannot use %s: %v", settings.Path, err)
 	}
 	log.Printf("[Soundboard] Serving sounds from %s (max %d s each)", settings.Path, settings.MaxSeconds)
-	return &Soundboard{
-		cfg:    *settings,
-		notify: notify,
-		cache:  make(map[string]cachedSound),
+	s := &Soundboard{
+		cfg:     *settings,
+		notify:  notify,
+		cache:   make(map[string]cachedSound),
+		voices:  make(map[int]*voice),
+		warming: make(map[string]bool),
 	}
+	// List decodes whatever it finds, so this warms the directory at startup and
+	// keeps doing it for files dropped in later.
+	go s.List()
+	return s
+}
+
+// warmNew decodes anything the scan turned up that is not cached yet, so the
+// first press on a pad never waits for FFmpeg. Runs in the background: List is
+// called from the status path and must not block on a decode.
+func (s *Soundboard) warmNew(sounds []Sound) {
+	s.mu.Lock()
+	var todo []string
+	for _, snd := range sounds {
+		if _, cached := s.cache[snd.ID]; cached || s.warming[snd.ID] {
+			continue
+		}
+		s.warming[snd.ID] = true
+		todo = append(todo, snd.ID)
+	}
+	s.mu.Unlock()
+
+	if len(todo) == 0 {
+		return
+	}
+
+	go func() {
+		held := 0
+		ok := 0
+		for _, id := range todo {
+			samples, err := s.load(id)
+			s.mu.Lock()
+			delete(s.warming, id)
+			s.mu.Unlock()
+			if err != nil {
+				log.Printf("[Soundboard] %s unusable: %v", id, err)
+				continue
+			}
+			held += len(samples) * 4
+			ok++
+		}
+		if ok > 0 {
+			log.Printf("[Soundboard] %d sound(s) ready, %.1f MB added", ok, float64(held)/(1<<20))
+		}
+	}()
 }
 
 func (s *Soundboard) Enabled() bool { return s != nil }
@@ -151,6 +196,7 @@ func (s *Soundboard) List() []Sound {
 	s.listAt = time.Now()
 	s.mu.Unlock()
 
+	s.warmNew(sounds)
 	return sounds
 }
 
@@ -163,7 +209,7 @@ func (s *Soundboard) cachedDurationMs(id string) int {
 	return 0
 }
 
-// Play layers another voice rather than restarting the sound.
+// Play replaces whatever the zone was sounding. One pad per zone at a time.
 func (s *Soundboard) Play(soundID string, zoneID int) (int, error) {
 	if s == nil {
 		return 0, fmt.Errorf("soundboard is disabled")
@@ -189,19 +235,15 @@ func (s *Soundboard) Play(soundID string, zoneID int) (int, error) {
 	}
 
 	s.mu.Lock()
-	if len(s.voices) >= soundboardMaxVoices {
-		s.mu.Unlock()
-		return 0, fmt.Errorf("too many sounds playing at once (max %d)", soundboardMaxVoices)
-	}
 	s.nextID++
 	id := s.nextID
-	s.voices = append(s.voices, &voice{
+	s.voices[zoneID] = &voice{
 		id:      id,
 		soundID: match.ID,
 		name:    match.Name,
 		zoneID:  zoneID,
 		samples: samples,
-	})
+	}
 	s.mu.Unlock()
 
 	s.notifyState()
@@ -213,16 +255,14 @@ func (s *Soundboard) StopVoice(voiceID int) bool {
 		return false
 	}
 	s.mu.Lock()
-	kept := s.voices[:0]
 	removed := false
-	for _, v := range s.voices {
+	for zoneID, v := range s.voices {
 		if v.id == voiceID {
+			delete(s.voices, zoneID)
 			removed = true
-			continue
+			break
 		}
-		kept = append(kept, v)
 	}
-	s.voices = kept
 	s.mu.Unlock()
 
 	if removed {
@@ -237,16 +277,14 @@ func (s *Soundboard) StopAll(zoneID int) {
 		return
 	}
 	s.mu.Lock()
-	kept := s.voices[:0]
-	removed := false
-	for _, v := range s.voices {
-		if zoneID == 0 || v.zoneID == zoneID {
-			removed = true
-			continue
-		}
-		kept = append(kept, v)
+	removed := len(s.voices) > 0
+	if zoneID == 0 {
+		clear(s.voices)
+	} else if _, ok := s.voices[zoneID]; ok {
+		delete(s.voices, zoneID)
+	} else {
+		removed = false
 	}
-	s.voices = kept
 	s.mu.Unlock()
 
 	if removed {
@@ -254,62 +292,37 @@ func (s *Soundboard) StopAll(zoneID int) {
 	}
 }
 
-// MixInto adds a zone's voices on top of what is already in master and returns
+// MixInto adds the zone's pad on top of what is already in master and returns
 // the peak of what it added, 0 to 1 per channel. Runs 50 times a second on the
-// Dante loop, so it allocates nothing beyond the scratch buffer it keeps.
+// Dante loop, so it allocates nothing.
 func (s *Soundboard) MixInto(zoneID int, master []byte, chL, chR, numChannels, frames int, gain float64) (peakL, peakR float64) {
 	if s == nil {
 		return 0, 0
 	}
 
-	need := frames * 2
-
 	s.mu.Lock()
-	var mix []int32
-	for _, v := range s.voices {
-		if v.zoneID != zoneID {
-			continue
-		}
-		if mix == nil {
-			if cap(s.scratch) < need {
-				s.scratch = make([]int32, need)
-			}
-			mix = s.scratch[:need]
-			for i := range mix {
-				mix[i] = 0
-			}
-		}
-		remaining := len(v.samples) - v.pos
-		if remaining > need {
-			remaining = need
-		}
-		for i := 0; i < remaining; i++ {
-			mix[i] = saturateAdd(mix[i], v.samples[v.pos+i])
-		}
-		v.pos += remaining
-	}
-	if mix == nil {
+	v := s.voices[zoneID]
+	if v == nil {
 		s.mu.Unlock()
 		return 0, 0
 	}
 
-	kept := s.voices[:0]
-	finished := false
-	for _, v := range s.voices {
-		if v.pos >= len(v.samples) {
-			finished = true
-			continue
-		}
-		kept = append(kept, v)
+	samples := v.samples[v.pos:]
+	if len(samples) > frames*2 {
+		samples = samples[:frames*2]
 	}
-	s.voices = kept
+	v.pos += len(samples)
+
+	finished := v.pos >= len(v.samples)
+	if finished {
+		delete(s.voices, zoneID)
+	}
 	s.mu.Unlock()
 
 	var maxL, maxR int32
-	for f := 0; f < frames; f++ {
+	for f := 0; f*2+1 < len(samples); f++ {
 		base := f * numChannels * 4
-		mixL := mix[f*2]
-		mixR := mix[f*2+1]
+		mixL, mixR := samples[f*2], samples[f*2+1]
 		if gain != 1.0 {
 			mixL = int32(float64(mixL) * gain)
 			mixR = int32(float64(mixR) * gain)
@@ -350,13 +363,8 @@ func saturateAdd(a, b int32) int32 {
 	return int32(sum)
 }
 
-type ZoneSounds struct {
-	Count int
-	Label string
-}
-
-// ZoneSummary labels each zone's pads, collapsing repeats into "Airhorn x3".
-func (s *Soundboard) ZoneSummary() map[int]ZoneSounds {
+// ZoneSummary names the pad each zone is sounding, for the zone list.
+func (s *Soundboard) ZoneSummary() map[int]string {
 	if s == nil {
 		return nil
 	}
@@ -367,33 +375,9 @@ func (s *Soundboard) ZoneSummary() map[int]ZoneSounds {
 		return nil
 	}
 
-	// First-appearance order, or the label reshuffles between updates.
-	order := make(map[int][]string)
-	counts := make(map[int]map[string]int)
-	total := make(map[int]int)
-
-	for _, v := range s.voices {
-		if counts[v.zoneID] == nil {
-			counts[v.zoneID] = make(map[string]int)
-		}
-		if counts[v.zoneID][v.name] == 0 {
-			order[v.zoneID] = append(order[v.zoneID], v.name)
-		}
-		counts[v.zoneID][v.name]++
-		total[v.zoneID]++
-	}
-
-	out := make(map[int]ZoneSounds, len(total))
-	for zoneID, names := range order {
-		parts := make([]string, 0, len(names))
-		for _, name := range names {
-			if n := counts[zoneID][name]; n > 1 {
-				parts = append(parts, fmt.Sprintf("%s x%d", name, n))
-			} else {
-				parts = append(parts, name)
-			}
-		}
-		out[zoneID] = ZoneSounds{Count: total[zoneID], Label: strings.Join(parts, ", ")}
+	out := make(map[int]string, len(s.voices))
+	for zoneID, v := range s.voices {
+		out[zoneID] = v.name
 	}
 	return out
 }
@@ -454,7 +438,6 @@ func (s *Soundboard) load(id string) ([]int32, error) {
 	s.cache[id] = cachedSound{samples: samples, modTime: info.ModTime().UnixNano(), size: info.Size()}
 	s.mu.Unlock()
 
-	log.Printf("[Soundboard] Decoded %s (%d ms)", id, len(samples)/2/48)
 	return samples, nil
 }
 

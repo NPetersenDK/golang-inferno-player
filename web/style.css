@@ -122,7 +122,6 @@ body {
   background-color: var(--bs-tertiary-bg);
 }
 
-/* A press layers another copy, so it must read as a hit, not a toggle. */
 .sound-pad:active {
   transform: scale(0.97);
   border-color: var(--bs-primary);
@@ -135,13 +134,6 @@ body {
 
 .sound-pad-name {
   max-width: 100%;
-}
-
-.sound-pad-count {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  font-size: 0.6rem;
 }
 
 .playing-sound {

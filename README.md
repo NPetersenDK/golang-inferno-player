@@ -220,7 +220,7 @@ mkdir sounds
 cp airhorn.mp3 applause.wav sounds/
 ```
 
-A pad plays **on top of** whatever the target zone is already doing rather than replacing it, and pressing the same pad again layers another copy instead of restarting the first. That is what separates a soundboard from a player: you can fire the same sound three times over itself, and **Stop All Sounds** clears the lot without touching the station underneath.
+A pad plays **on top of** whatever the target zone is already doing rather than replacing it, so a sound can fire over a station without interrupting it. A zone sounds one pad at a time: pressing another pad, or the same one again, takes over from what was playing. **Stop All Sounds** clears every zone without touching the stations underneath.
 
 Pads follow the same rule as stations: only zones without a `source` can be targeted. A Spotify or FM zone belongs to its producer and is left alone. Zone volume and mute apply to pads too, so muting a zone silences all of it.
 

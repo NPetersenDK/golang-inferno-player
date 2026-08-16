@@ -336,7 +336,7 @@ func (m *PlaybackManager) StopAll() {
 	}
 }
 
-// PlaySound layers a pad over a zone and returns its voice ID.
+// PlaySound puts a pad over a zone, replacing any pad already sounding there.
 func (m *PlaybackManager) PlaySound(soundID string, zoneID int) (int, error) {
 	z, err := m.GetZone(zoneID)
 	if err != nil {
@@ -392,10 +392,7 @@ func (m *PlaybackManager) GetStatus() SystemStatus {
 	for _, id := range m.zoneOrder {
 		if z, ok := m.zones[id]; ok {
 			st := z.GetState()
-			if pads, ok := padsByZone[id]; ok {
-				st.ActiveSounds = pads.Count
-				st.SoundLabel = pads.Label
-			}
+			st.SoundLabel = padsByZone[id]
 			if st.Status == StatusPlaying {
 				active++
 			}

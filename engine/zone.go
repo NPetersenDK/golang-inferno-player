@@ -71,7 +71,6 @@ type ZoneState struct {
 	Muted        bool           `json:"muted"`
 	IsSource     bool           `json:"is_source"`
 	SourceLabel  string         `json:"source_label,omitempty"`
-	ActiveSounds int            `json:"active_sounds,omitempty"`
 	SoundLabel   string         `json:"sound_label,omitempty"`
 	PeakLeft     float64        `json:"peak_left"`  // 0.0 - 1.0
 	PeakRight    float64        `json:"peak_right"` // 0.0 - 1.0

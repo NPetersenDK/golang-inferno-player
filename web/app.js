@@ -293,15 +293,9 @@ function renderSoundsGrid(force) {
     buildSoundsGrid(sounds, sb);
   }
 
-  const counts = new Map();
-  (sb.playing || []).forEach(v => counts.set(v.sound_id, (counts.get(v.sound_id) || 0) + 1));
-
+  const sounding = new Set((sb.playing || []).map(v => v.sound_id));
   soundNodes.forEach((refs, id) => {
-    // The lit pad already means "one copy"; the badge only matters when layered.
-    const n = counts.get(id) || 0;
-    refs.root.classList.toggle("sound-pad-active", n > 0);
-    refs.count.hidden = n < 2;
-    setText(refs.count, n > 1 ? `${n}x` : "");
+    refs.root.classList.toggle("sound-pad-active", sounding.has(id));
   });
 }
 
@@ -332,19 +326,18 @@ function buildSoundsGrid(sounds, sb) {
     col.innerHTML = `
       <button class="sound-pad w-100">
         <span class="sound-pad-name text-truncate">${escapeHtml(snd.name)}</span>
-        <span class="badge text-bg-success sound-pad-count js-count" hidden></span>
       </button>`;
 
     const root = col.querySelector(".sound-pad");
     root.title = snd.duration_ms ? `${snd.name} (${(snd.duration_ms / 1000).toFixed(1)}s)` : snd.name;
     root.addEventListener("click", () => playSound(snd.id));
 
-    soundNodes.set(snd.id, { root, count: col.querySelector(".js-count") });
+    soundNodes.set(snd.id, { root });
     soundsGrid.appendChild(col);
   });
 }
 
-// Each press layers a voice, so one sound can list several times, each stopped alone.
+// One row per zone: a zone sounds at most one pad at a time.
 function renderPlaying(playing) {
   const signature = playing.map(v => `${v.voice_id}:${v.name}`).join("|");
   if (signature !== voiceListSignature) {
@@ -533,9 +526,9 @@ function createZoneNode(zone) {
 function updateZoneNode(refs, zone) {
   const isPlaying = (zone.status === "playing");
   const isBuffering = (zone.status === "buffering");
-  const padCount = zone.active_sounds || 0;
+  const pad = zone.sound_label || "";
   // A pad over an idle zone still puts audio on the wire, so it counts as live.
-  const audible = isPlaying || padCount > 0;
+  const audible = isPlaying || pad !== "";
 
   refs.root.classList.toggle("active-zone", !zone.is_source && zone.id === activeZoneId);
   refs.root.classList.toggle("playing-zone", audible);
@@ -544,17 +537,17 @@ function updateZoneNode(refs, zone) {
   setText(refs.channels, `${zone.dante_left || ""} / ${zone.dante_right || ""}`);
   setText(refs.station, zone.station_name || "No stream");
 
-  refs.sounds.hidden = padCount === 0;
-  setText(refs.soundLabel, zone.sound_label || "");
+  refs.sounds.hidden = pad === "";
+  setText(refs.soundLabel, pad);
 
-  const statusKey = `${zone.status}/${zone.is_source}/${padCount > 0}`;
+  const statusKey = `${zone.status}/${zone.is_source}/${pad !== ""}`;
   if (statusKey !== refs.lastStatus) {
     refs.lastStatus = statusKey;
     refs.badge.innerHTML = isPlaying
       ? '<span class="badge text-bg-success"><i class="fa-solid fa-play fa-xs me-1"></i>Playing</span>'
       : isBuffering
         ? '<span class="badge text-bg-warning"><i class="fa-solid fa-spinner fa-spin fa-xs me-1"></i>Buffering</span>'
-        : padCount > 0
+        : pad !== ""
           ? '<span class="badge text-bg-success"><i class="fa-solid fa-grip fa-xs me-1"></i>Sounds</span>'
           : zone.is_source
             ? '<span class="badge text-bg-secondary"><i class="fa-solid fa-plug fa-xs me-1"></i>Waiting</span>'
