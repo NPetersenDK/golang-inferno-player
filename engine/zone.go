@@ -60,6 +60,8 @@ type ZoneState struct {
 	Muted        bool           `json:"muted"`
 	IsSource     bool           `json:"is_source"`
 	SourceLabel  string         `json:"source_label,omitempty"`
+	ActiveSounds int            `json:"active_sounds,omitempty"`
+	SoundLabel   string         `json:"sound_label,omitempty"`
 	PeakLeft     float64        `json:"peak_left"`  // 0.0 - 1.0
 	PeakRight    float64        `json:"peak_right"` // 0.0 - 1.0
 	ErrorMessage string         `json:"error_message,omitempty"`
@@ -548,6 +550,18 @@ func (z *ZonePlayer) PullSamples(numFrames int) ([]int32, bool) {
 	z.setPeakR(float64(maxR) / float64(math.MaxInt32))
 
 	return samples, true
+}
+
+// BumpPeaks raises the meters to take account of audio mixed on top of the
+// zone. PullSamples only sees the zone's own stream, so without this a
+// soundboard pad over a silent zone would not move the meters at all.
+func (z *ZonePlayer) BumpPeaks(l, r float64) {
+	if l > z.getPeakL() {
+		z.setPeakL(l)
+	}
+	if r > z.getPeakR() {
+		z.setPeakR(r)
+	}
 }
 
 // GainFactor is the zone's volume as a multiplier, zero while muted. Anything

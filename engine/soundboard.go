@@ -265,11 +265,14 @@ func (s *Soundboard) StopAll(zoneID int) {
 // already playing, and drops voices that have run out. gain carries the zone's
 // volume and mute, so muting a zone silences its pads too.
 //
+// Returns the peak level of what it added, 0 to 1 per channel, so the zone's
+// meters can show a pad firing over a silent zone.
+//
 // Called from the Dante audio loop 50 times a second, so it does no allocation
 // beyond a scratch buffer that it keeps.
-func (s *Soundboard) MixInto(zoneID int, master []byte, chL, chR, numChannels, frames int, gain float64) {
+func (s *Soundboard) MixInto(zoneID int, master []byte, chL, chR, numChannels, frames int, gain float64) (peakL, peakR float64) {
 	if s == nil {
-		return
+		return 0, 0
 	}
 
 	need := frames * 2
@@ -300,7 +303,7 @@ func (s *Soundboard) MixInto(zoneID int, master []byte, chL, chR, numChannels, f
 	}
 	if mix == nil {
 		s.mu.Unlock()
-		return
+		return 0, 0
 	}
 
 	// Retire anything that reached its end.
@@ -316,6 +319,7 @@ func (s *Soundboard) MixInto(zoneID int, master []byte, chL, chR, numChannels, f
 	s.voices = kept
 	s.mu.Unlock()
 
+	var maxL, maxR int32
 	for f := 0; f < frames; f++ {
 		base := f * numChannels * 4
 		mixL := mix[f*2]
@@ -324,6 +328,12 @@ func (s *Soundboard) MixInto(zoneID int, master []byte, chL, chR, numChannels, f
 			mixL = int32(float64(mixL) * gain)
 			mixR = int32(float64(mixR) * gain)
 		}
+		if a := absInt32(mixL); a > maxL {
+			maxL = a
+		}
+		if a := absInt32(mixR); a > maxR {
+			maxR = a
+		}
 		addSample(master, base+chL*4, mixL)
 		addSample(master, base+chR*4, mixR)
 	}
@@ -331,6 +341,7 @@ func (s *Soundboard) MixInto(zoneID int, master []byte, chL, chR, numChannels, f
 	if finished {
 		s.notifyState()
 	}
+	return float64(maxL) / float64(math.MaxInt32), float64(maxR) / float64(math.MaxInt32)
 }
 
 func addSample(buf []byte, offset int, delta int32) {
@@ -352,6 +363,57 @@ func saturateAdd(a, b int32) int32 {
 		return math.MinInt32
 	}
 	return int32(sum)
+}
+
+// ZoneSounds is what one zone currently has sounding, for the zone list.
+type ZoneSounds struct {
+	Count int
+	Label string
+}
+
+// ZoneSummary describes each zone's pads as a line of text, collapsing repeats
+// of the same sound into "Airhorn x3" rather than listing it three times.
+func (s *Soundboard) ZoneSummary() map[int]ZoneSounds {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.voices) == 0 {
+		return nil
+	}
+
+	// Order of first appearance, so the label does not reshuffle itself between
+	// updates.
+	order := make(map[int][]string)
+	counts := make(map[int]map[string]int)
+	total := make(map[int]int)
+
+	for _, v := range s.voices {
+		if counts[v.zoneID] == nil {
+			counts[v.zoneID] = make(map[string]int)
+		}
+		if counts[v.zoneID][v.name] == 0 {
+			order[v.zoneID] = append(order[v.zoneID], v.name)
+		}
+		counts[v.zoneID][v.name]++
+		total[v.zoneID]++
+	}
+
+	out := make(map[int]ZoneSounds, len(total))
+	for zoneID, names := range order {
+		parts := make([]string, 0, len(names))
+		for _, name := range names {
+			if n := counts[zoneID][name]; n > 1 {
+				parts = append(parts, fmt.Sprintf("%s x%d", name, n))
+			} else {
+				parts = append(parts, name)
+			}
+		}
+		out[zoneID] = ZoneSounds{Count: total[zoneID], Label: strings.Join(parts, ", ")}
+	}
+	return out
 }
 
 func (s *Soundboard) State() SoundboardState {

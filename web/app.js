@@ -468,6 +468,10 @@ function createZoneNode(zone) {
       <i class="fa-solid fa-music me-1"></i> <span class="js-station"></span>
     </div>
 
+    <div class="small text-truncate mb-2 text-success js-sounds" style="font-size: 0.75rem;" hidden>
+      <i class="fa-solid fa-grip me-1"></i> <span class="js-sound-label"></span>
+    </div>
+
     <!-- Peak Meter Bars -->
     <div class="d-flex flex-column gap-1 mb-2">
       <div class="d-flex align-items-center gap-1">
@@ -499,6 +503,8 @@ function createZoneNode(zone) {
     channels: root.querySelector(".js-channels"),
     badge: root.querySelector(".js-badge"),
     station: root.querySelector(".js-station"),
+    sounds: root.querySelector(".js-sounds"),
+    soundLabel: root.querySelector(".js-sound-label"),
     vuL: root.querySelector(".js-vu-l"),
     vuR: root.querySelector(".js-vu-r"),
     muteBtn: root.querySelector(".btn-mute"),
@@ -547,15 +553,22 @@ function createZoneNode(zone) {
 function updateZoneNode(refs, zone) {
   const isPlaying = (zone.status === "playing");
   const isBuffering = (zone.status === "buffering");
+  const padCount = zone.active_sounds || 0;
+  // A pad sounding over an otherwise idle zone still puts audio on the wire, so
+  // as far as the meters and the border are concerned the zone is live.
+  const audible = isPlaying || padCount > 0;
 
   refs.root.classList.toggle("active-zone", !zone.is_source && zone.id === activeZoneId);
-  refs.root.classList.toggle("playing-zone", isPlaying);
+  refs.root.classList.toggle("playing-zone", audible);
 
   setText(refs.name, zone.name || "");
   setText(refs.channels, `${zone.dante_left || ""} / ${zone.dante_right || ""}`);
   setText(refs.station, zone.station_name || "No stream");
 
-  const statusKey = `${zone.status}/${zone.is_source}`;
+  refs.sounds.hidden = padCount === 0;
+  setText(refs.soundLabel, zone.sound_label || "");
+
+  const statusKey = `${zone.status}/${zone.is_source}/${padCount > 0}`;
   if (statusKey !== refs.lastStatus) {
     refs.lastStatus = statusKey;
     // A source zone is never idle in the station sense: it is wired to a
@@ -564,13 +577,15 @@ function updateZoneNode(refs, zone) {
       ? '<span class="badge text-bg-success"><i class="fa-solid fa-play fa-xs me-1"></i>Playing</span>'
       : isBuffering
         ? '<span class="badge text-bg-warning"><i class="fa-solid fa-spinner fa-spin fa-xs me-1"></i>Buffering</span>'
-        : zone.is_source
-          ? '<span class="badge text-bg-secondary"><i class="fa-solid fa-plug fa-xs me-1"></i>Waiting</span>'
-          : '<span class="badge text-bg-secondary">Idle</span>';
+        : padCount > 0
+          ? '<span class="badge text-bg-success"><i class="fa-solid fa-grip fa-xs me-1"></i>Sounds</span>'
+          : zone.is_source
+            ? '<span class="badge text-bg-secondary"><i class="fa-solid fa-plug fa-xs me-1"></i>Waiting</span>'
+            : '<span class="badge text-bg-secondary">Idle</span>';
   }
 
-  const peakLPct = isPlaying ? Math.min(100, Math.round((zone.peak_left || 0) * 100)) : 0;
-  const peakRPct = isPlaying ? Math.min(100, Math.round((zone.peak_right || 0) * 100)) : 0;
+  const peakLPct = audible ? Math.min(100, Math.round((zone.peak_left || 0) * 100)) : 0;
+  const peakRPct = audible ? Math.min(100, Math.round((zone.peak_right || 0) * 100)) : 0;
   refs.vuL.style.width = `${peakLPct}%`;
   refs.vuR.style.width = `${peakRPct}%`;
 

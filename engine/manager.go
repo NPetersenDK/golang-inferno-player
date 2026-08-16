@@ -239,8 +239,13 @@ func (m *PlaybackManager) masterDanteAudioLoop() {
 				}
 
 				// Pads sit on top of whatever the zone is playing, so a sound can
-				// fire over a station without interrupting it.
-				m.soundboard.MixInto(zoneID, masterBuf, chL, chR, numChannels, framesPerTick, player.GainFactor())
+				// fire over a station without interrupting it. Their level feeds
+				// the zone meters too, or a pad over a silent zone would show
+				// nothing.
+				padL, padR := m.soundboard.MixInto(zoneID, masterBuf, chL, chR, numChannels, framesPerTick, player.GainFactor())
+				if padL > 0 || padR > 0 {
+					player.BumpPeaks(padL, padR)
+				}
 			}
 			m.mu.RUnlock()
 
@@ -406,11 +411,17 @@ func (m *PlaybackManager) GetStatus() SystemStatus {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	padsByZone := m.soundboard.ZoneSummary()
+
 	active := 0
 	zones := make([]ZoneState, 0, len(m.zoneOrder))
 	for _, id := range m.zoneOrder {
 		if z, ok := m.zones[id]; ok {
 			st := z.GetState()
+			if pads, ok := padsByZone[id]; ok {
+				st.ActiveSounds = pads.Count
+				st.SoundLabel = pads.Label
+			}
 			if st.Status == StatusPlaying {
 				active++
 			}

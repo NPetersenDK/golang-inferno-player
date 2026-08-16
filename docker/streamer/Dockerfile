@@ -64,6 +64,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     git clone --depth 1 --recurse-submodules --shallow-submodules -b dev https://github.com/teodly/inferno /build/inferno && \
     cd /build/inferno && \
+    sed -i '/add_txt_truncated("")/d' inferno_aoip/src/device_server/mdns_server.rs && \
     if [ "$TARGETARCH" = "arm64" ]; then \
       RUSTFLAGS="-C target-feature=-crt-static" cargo build --release --target=aarch64-unknown-linux-gnu -p alsa_pcm_inferno && \
       mkdir -p /out && cp target/aarch64-unknown-linux-gnu/release/libasound_module_pcm_inferno.so /out/; \

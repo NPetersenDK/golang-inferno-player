@@ -153,6 +153,67 @@ func TestMixIntoAdvancesAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestMixIntoReportsPeakSoTheMetersMove(t *testing.T) {
+	sb := newTestBoard()
+	half := int32(math.MaxInt32 / 2)
+	sb.voices = []*voice{{id: 1, zoneID: 1, samples: []int32{half, 0}}}
+
+	peakL, peakR := sb.MixInto(1, makeMaster(1), 0, 1, testChannels, 1, 1.0)
+	if peakL < 0.49 || peakL > 0.51 {
+		t.Errorf("peakL = %v, want about 0.5", peakL)
+	}
+	if peakR != 0 {
+		t.Errorf("peakR = %v, want 0: the right channel was silent", peakR)
+	}
+
+	// Nothing sounding must report nothing, or an idle zone's meters would stick.
+	sb.voices = nil
+	if l, r := sb.MixInto(1, makeMaster(1), 0, 1, testChannels, 1, 1.0); l != 0 || r != 0 {
+		t.Errorf("peaks = %v/%v with no voices, want 0/0", l, r)
+	}
+}
+
+func TestMixIntoPeakFollowsZoneGain(t *testing.T) {
+	sb := newTestBoard()
+	full := int32(math.MaxInt32)
+	sb.voices = []*voice{{id: 1, zoneID: 1, samples: []int32{full, full}}}
+
+	// Muted zone: the pad is inaudible, so the meters must not twitch either.
+	peakL, _ := sb.MixInto(1, makeMaster(1), 0, 1, testChannels, 1, 0.0)
+	if peakL != 0 {
+		t.Errorf("peakL = %v while muted, want 0", peakL)
+	}
+}
+
+func TestZoneSummaryCollapsesRepeats(t *testing.T) {
+	sb := newTestBoard()
+	sb.voices = []*voice{
+		{id: 1, zoneID: 2, name: "Airhorn", samples: []int32{1}},
+		{id: 2, zoneID: 2, name: "Airhorn", samples: []int32{1}},
+		{id: 3, zoneID: 2, name: "Applause", samples: []int32{1}},
+		{id: 4, zoneID: 3, name: "Drumroll", samples: []int32{1}},
+	}
+
+	summary := sb.ZoneSummary()
+	if got := summary[2].Count; got != 3 {
+		t.Errorf("zone 2 count = %d, want 3", got)
+	}
+	if got := summary[2].Label; got != "Airhorn x2, Applause" {
+		t.Errorf("zone 2 label = %q, want %q", got, "Airhorn x2, Applause")
+	}
+	if got := summary[3].Label; got != "Drumroll" {
+		t.Errorf("zone 3 label = %q, want %q", got, "Drumroll")
+	}
+	if _, ok := summary[1]; ok {
+		t.Error("zone 1 has no voices and should not appear in the summary")
+	}
+
+	sb.voices = nil
+	if summary := sb.ZoneSummary(); summary != nil {
+		t.Errorf("ZoneSummary() = %v with nothing playing, want nil", summary)
+	}
+}
+
 func TestStopAllByZone(t *testing.T) {
 	sb := newTestBoard()
 	sb.voices = []*voice{
@@ -197,7 +258,12 @@ func TestNilSoundboardIsInert(t *testing.T) {
 		t.Error("Play() on a nil soundboard should report the feature is off")
 	}
 	sb.StopAll(0)
-	sb.MixInto(1, makeMaster(1), 0, 1, testChannels, 1, 1.0)
+	if l, r := sb.MixInto(1, makeMaster(1), 0, 1, testChannels, 1, 1.0); l != 0 || r != 0 {
+		t.Errorf("MixInto on a nil soundboard = %v/%v, want 0/0", l, r)
+	}
+	if sb.ZoneSummary() != nil {
+		t.Error("ZoneSummary() on a nil soundboard should be nil")
+	}
 	if st := sb.State(); st.Enabled {
 		t.Error("State().Enabled = true on a nil soundboard")
 	}
