@@ -10,10 +10,10 @@ Bitfocus Companion module for controlling Dante Streamer (`golang-inferno-player
 
 ## Installation in Companion
 
-1. Download the `companion-module-dante-streamer.tar.gz` artifact from the GitHub Actions build.
+1. Download the `companion-module-dante-streamer.tgz` artifact from the GitHub Actions build.
 2. In Companion:
    - Go to **Connections** -> **Import / Custom module**.
-   - Upload the `.tar.gz` archive.
+   - Upload the `.tgz` package.
    - Add the **Dante Streamer Soundboard** connection.
 3. Configure **Host / IP** (e.g. `10.0.15.75`) and **HTTP Port** (`8085`).
 

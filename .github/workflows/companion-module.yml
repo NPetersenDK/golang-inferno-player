@@ -35,11 +35,11 @@ jobs:
 
       - name: Package module archive
         working-directory: bitfocus
-        run: tar -czf ../companion-module-dante-streamer.tar.gz package.json main.js companion node_modules README.md
+        run: tar -czf ../companion-module-dante-streamer.tgz package.json main.js companion node_modules README.md
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: companion-module-dante-streamer
-          path: companion-module-dante-streamer.tar.gz
+          path: companion-module-dante-streamer.tgz
           retention-days: 30
