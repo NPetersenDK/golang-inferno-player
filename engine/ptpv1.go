@@ -98,12 +98,12 @@ type PTPMonitor struct {
 	fitA  float64 // offset in ns at fitT0
 	fitB  float64 // ns of offset gained per second of local time
 
-	locked     bool
-	twoStep    bool
-	masterID   string
-	masterUUID [6]byte
-	syncCount  uint64
-	lastSync   time.Time
+	locked        bool
+	twoStep       bool
+	masterID      string
+	masterClockID [8]byte
+	syncCount     uint64
+	lastSync      time.Time
 
 	pendMu  sync.Mutex
 	pending map[string]pendingSync
@@ -226,9 +226,9 @@ func (m *PTPMonitor) handlePacket(pkt []byte, rxNs int64) {
 		if len(pkt) < ptpSyncLen {
 			return
 		}
-		var uuid [6]byte
-		copy(uuid[:], pkt[offSourceUUID:offSourceUUID+6])
-		m.noteMaster(srcID, uuid)
+		var clockID [8]byte
+		copy(clockID[:], pkt[offSourceUUID:offSourceUUID+8])
+		m.noteMaster(srcID, clockID)
 		assist := binary.BigEndian.Uint16(pkt[offFlags:])&ptpFlagAssist != 0
 		if assist || m.isTwoStep() {
 			m.pendMu.Lock()
@@ -277,11 +277,11 @@ func (m *PTPMonitor) setTwoStep() {
 
 // noteMaster resets the fit when a different clock starts sending Sync, since
 // the two grandmasters share no timeline.
-func (m *PTPMonitor) noteMaster(srcID string, uuid [6]byte) {
+func (m *PTPMonitor) noteMaster(srcID string, clockID [8]byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.syncCount++
-	m.masterUUID = uuid
+	m.masterClockID = clockID
 	if m.masterID == srcID {
 		return
 	}
@@ -382,14 +382,12 @@ func (m *PTPMonitor) refit() {
 }
 
 func (m *PTPMonitor) writeClockStats() {
-	uuid := m.masterUUID
-	if uuid[0] == 0 && uuid[1] == 0 && uuid[2] == 0 && uuid[3] == 0 && uuid[4] == 0 && uuid[5] == 0 {
+	cid := m.masterClockID
+	if cid[0] == 0 && cid[1] == 0 && cid[2] == 0 && cid[3] == 0 && cid[4] == 0 && cid[5] == 0 {
 		return
 	}
 
-	// Dante EUI-64 clock ID: 00:1d:c1:ff:fe:2a:4f:88 (16 hex chars)
-	clockIDHex := fmt.Sprintf("%02x%02x%02xfffe%02x%02x%02x",
-		uuid[0], uuid[1], uuid[2], uuid[3], uuid[4], uuid[5])
+	clockIDHex := hex.EncodeToString(cid[:])
 
 	ifaces, err := net.Interfaces()
 	if err != nil {
