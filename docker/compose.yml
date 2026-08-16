@@ -13,8 +13,8 @@ services:
       # Interface dedicated to Dante (eth1, usb0, enx..., end0, ...)
       - DANTE_INTERFACE=eth1
       - INFERNO_NAME=Dante-Pi
-      - INFERNO_TX_CHANNELS=8
-      - INFERNO_SAMPLE_RATE=48000
+      # Channels advertised to Dante, 2/4/6/8. Two per zone.
+      - DANTE_TX_CHANNELS=8
       - HTTP_PORT=8085
     cap_add:
       # SYS_TIME is deliberately absent: the PTP listener serves a clock overlay

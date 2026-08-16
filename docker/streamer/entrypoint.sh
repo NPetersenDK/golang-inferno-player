@@ -61,15 +61,27 @@ DANTE_TX_CHANNELS="${DANTE_TX_CHANNELS:-8}"
 case "$DANTE_TX_CHANNELS" in
     2|4|6|8)
         sed -i "s/^\( *TX_CHANNELS \).*/\1$DANTE_TX_CHANNELS/" /etc/asound.conf
-        export INFERNO_TX_CHANNELS="$DANTE_TX_CHANNELS"
         export DANTE_TX_CHANNELS
         echo "[Dante] Advertising $DANTE_TX_CHANNELS TX channels"
         ;;
     *)
         echo "[Dante] WARNING: DANTE_TX_CHANNELS=$DANTE_TX_CHANNELS is not one of 2/4/6/8, keeping 8"
-        unset DANTE_TX_CHANNELS
+        DANTE_TX_CHANNELS=8
+        export DANTE_TX_CHANNELS
         ;;
 esac
+
+# Inferno persists its TX flows and restores them without checking them against
+# the current channel count, so a flow left over from a wider configuration
+# panics the 'flows TX' thread with an out-of-bounds channel index. Drop the
+# saved state whenever the count changes; the routing has to be redone anyway.
+STATE_DIR="/root/.local/state/inferno_aoip"
+CHANNEL_STAMP="$STATE_DIR/.tx_channels"
+if [ -f "$CHANNEL_STAMP" ] && [ "$(cat "$CHANNEL_STAMP")" != "$DANTE_TX_CHANNELS" ]; then
+    echo "[Dante] Channel count changed $(cat "$CHANNEL_STAMP") -> $DANTE_TX_CHANNELS, clearing saved flows"
+    rm -f "$STATE_DIR"/*
+fi
+printf '%s' "$DANTE_TX_CHANNELS" > "$CHANNEL_STAMP"
 
 # Ensure kernel routes multicast (Dante PTP 224.0.1.129, mDNS 224.0.0.251, Audio 239.255.0.0/16) to Dante NIC
 ip link set "$DANTE_IFACE" multicast on 2>/dev/null || true

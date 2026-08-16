@@ -28,8 +28,7 @@ services:
     environment:
       - DANTE_INTERFACE=eth1
       - INFERNO_NAME=Dante-Pi
-      - INFERNO_TX_CHANNELS=8
-      - INFERNO_SAMPLE_RATE=48000
+      - DANTE_TX_CHANNELS=8
       - HTTP_PORT=8085
     cap_add:
       - SYS_TIME

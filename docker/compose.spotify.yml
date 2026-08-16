@@ -13,8 +13,8 @@ services:
     environment:
       - DANTE_INTERFACE=eth1
       - INFERNO_NAME=Dante-Pi
-      - INFERNO_TX_CHANNELS=8
-      - INFERNO_SAMPLE_RATE=48000
+      # Channels advertised to Dante, 2/4/6/8. Two per zone.
+      - DANTE_TX_CHANNELS=8
       - HTTP_PORT=8085
       # Latency knobs, smallest risk first. Lower means snappier; too low shows
       # up as [Audio Health] counting holes in the log.

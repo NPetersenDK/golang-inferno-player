@@ -103,8 +103,7 @@ COPY docker/streamer/asound.conf /etc/asound.conf
 COPY --chmod=0755 docker/streamer/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 ENV INFERNO_NAME="Dante-Pi"
-ENV INFERNO_TX_CHANNELS=8
-ENV INFERNO_SAMPLE_RATE=48000
+ENV DANTE_TX_CHANNELS=8
 ENV HTTP_PORT=8085
 
 EXPOSE 8085

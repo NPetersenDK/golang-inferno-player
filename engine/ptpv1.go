@@ -13,6 +13,7 @@ package engine
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"math"
@@ -97,11 +98,12 @@ type PTPMonitor struct {
 	fitA  float64 // offset in ns at fitT0
 	fitB  float64 // ns of offset gained per second of local time
 
-	locked    bool
-	twoStep   bool
-	masterID  string
-	syncCount uint64
-	lastSync  time.Time
+	locked     bool
+	twoStep    bool
+	masterID   string
+	masterUUID [6]byte
+	syncCount  uint64
+	lastSync   time.Time
 
 	pendMu  sync.Mutex
 	pending map[string]pendingSync
@@ -224,7 +226,9 @@ func (m *PTPMonitor) handlePacket(pkt []byte, rxNs int64) {
 		if len(pkt) < ptpSyncLen {
 			return
 		}
-		m.noteMaster(srcID)
+		var uuid [6]byte
+		copy(uuid[:], pkt[offSourceUUID:offSourceUUID+6])
+		m.noteMaster(srcID, uuid)
 		assist := binary.BigEndian.Uint16(pkt[offFlags:])&ptpFlagAssist != 0
 		if assist || m.isTwoStep() {
 			m.pendMu.Lock()
@@ -273,10 +277,11 @@ func (m *PTPMonitor) setTwoStep() {
 
 // noteMaster resets the fit when a different clock starts sending Sync, since
 // the two grandmasters share no timeline.
-func (m *PTPMonitor) noteMaster(srcID string) {
+func (m *PTPMonitor) noteMaster(srcID string, uuid [6]byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.syncCount++
+	m.masterUUID = uuid
 	if m.masterID == srcID {
 		return
 	}
@@ -371,8 +376,33 @@ func (m *PTPMonitor) refit() {
 		log.Printf("[PTP] grandmaster clock reads %d.%09d s, local CLOCK_REALTIME %d.%09d s",
 			masterNs/1_000_000_000, masterNs%1_000_000_000,
 			last.localNs/1_000_000_000, last.localNs%1_000_000_000)
+		m.writeClockStats()
 	}
 	m.locked = true
+}
+
+func (m *PTPMonitor) writeClockStats() {
+	uuid := m.masterUUID
+	if uuid[0] == 0 && uuid[1] == 0 && uuid[2] == 0 && uuid[3] == 0 && uuid[4] == 0 && uuid[5] == 0 {
+		return
+	}
+
+	// Dante EUI-64 clock ID: 00:1d:c1:ff:fe:2a:4f:88 (16 hex chars)
+	clockIDHex := fmt.Sprintf("%02x%02x%02xfffe%02x%02x%02x",
+		uuid[0], uuid[1], uuid[2], uuid[3], uuid[4], uuid[5])
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return
+	}
+
+	for _, ifi := range ifaces {
+		mac := ifi.HardwareAddr
+		if len(mac) == 6 {
+			filename := fmt.Sprintf("/tmp/clock-stats.%s0000", hex.EncodeToString(mac))
+			_ = os.WriteFile(filename, []byte(clockIDHex+"\n"), 0666)
+		}
+	}
 }
 
 // lsqFit fits offset(ns) = a + b*seconds_since_t0 over the selected samples.
