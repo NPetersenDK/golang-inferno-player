@@ -1,8 +1,8 @@
 {
   "type": "connection",
   "id": "dante-streamer",
-  "name": "Dante Streamer Soundboard",
-  "shortname": "Dante Sound",
+  "name": "Dante Streamer",
+  "shortname": "DanteStreamer",
   "description": "Dynamic Soundboard and Zone control for Dante Streamer (golang-inferno-player)",
   "version": "1.0.0",
   "license": "MIT",

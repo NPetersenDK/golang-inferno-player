@@ -2,12 +2,8 @@ name: Build Bitfocus Companion Module
 
 on:
   push:
-    paths:
-      - 'bitfocus/**'
-      - '.github/workflows/companion-module.yml'
-  pull_request:
-    paths:
-      - 'bitfocus/**'
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
 
 concurrency:
@@ -29,6 +25,22 @@ jobs:
           cache: 'npm'
           cache-dependency-path: 'bitfocus/package.json'
 
+      - name: Set module version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ -z "$VERSION" ] || [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            VERSION=$(node -p "require('./bitfocus/package.json').version || '1.0.0'")
+          fi
+          echo "MODULE_VERSION=$VERSION" >> $GITHUB_ENV
+          npm --prefix bitfocus version "$VERSION" --no-git-tag-version --allow-same-version
+          node -e "
+            const fs = require('fs');
+            const file = './bitfocus/companion/manifest.json';
+            const m = JSON.parse(fs.readFileSync(file, 'utf8'));
+            m.version = '$VERSION';
+            fs.writeFileSync(file, JSON.stringify(m, null, 2) + '\n');
+          "
+
       - name: Install dependencies
         working-directory: bitfocus
         run: npm install
@@ -40,6 +52,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: companion-module-dante-streamer
+          name: dante-streamer-${{ env.MODULE_VERSION }}
           path: bitfocus/*.tgz
           retention-days: 30

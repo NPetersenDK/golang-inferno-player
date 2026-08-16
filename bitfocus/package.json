@@ -1,7 +1,8 @@
 {
   "name": "companion-module-dante-streamer",
   "version": "1.0.0",
-  "description": "Bitfocus Companion module for Dante Streamer soundboard and zone control",
+  "description": "Bitfocus Companion module for Dante Streamer and zone control",
+  "type": "module",
   "main": "main.js",
   "scripts": {
     "build": "companion-module-build"
