@@ -1,0 +1,35 @@
+{
+  "id": "dante-streamer",
+  "name": "Dante Streamer Soundboard",
+  "shortname": "Dante Sound",
+  "description": "Dynamic Soundboard and Zone control for Dante Streamer (golang-inferno-player)",
+  "version": "1.0.0",
+  "license": "MIT",
+  "repository": "https://github.com/npetersendk/golang-inferno-player",
+  "bugs": "https://github.com/npetersendk/golang-inferno-player/issues",
+  "maintainers": [
+    {
+      "name": "Dante Streamer"
+    }
+  ],
+  "legacyIds": [],
+  "runtime": {
+    "type": "node18",
+    "api": "nodejs-ipc",
+    "apiVersion": "1.8.0",
+    "entrypoint": "../main.js"
+  },
+  "manufacturer": "Custom",
+  "products": [
+    "Dante Streamer",
+    "Dante-Pi"
+  ],
+  "keywords": [
+    "Dante",
+    "Soundboard",
+    "Audio",
+    "AoIP",
+    "Streamer",
+    "Radio"
+  ]
+}

@@ -1,0 +1,45 @@
+name: Build Bitfocus Companion Module
+
+on:
+  push:
+    paths:
+      - 'bitfocus/**'
+      - '.github/workflows/companion-module.yml'
+  pull_request:
+    paths:
+      - 'bitfocus/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-module:
+    name: Package Companion Module
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: 'bitfocus/package.json'
+
+      - name: Install dependencies
+        working-directory: bitfocus
+        run: npm install --omit=dev
+
+      - name: Package module archive
+        working-directory: bitfocus
+        run: tar -czf ../companion-module-dante-streamer.tar.gz package.json main.js companion node_modules README.md
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: companion-module-dante-streamer
+          path: companion-module-dante-streamer.tar.gz
+          retention-days: 30
