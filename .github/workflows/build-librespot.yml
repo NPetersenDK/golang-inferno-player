@@ -1,21 +1,8 @@
 name: Build & Publish Spotify Producer Image
 
-# Builds the optional Spotify Connect producer used by docker/compose.spotify.yml.
-#
-# This is a separate image with its own lifecycle. The main streamer image does
-# not depend on it in any way - it is only referenced by the optional Spotify
-# compose file, and users who do not want Spotify never pull it.
-#
-# Its content tracks upstream rather than this repository - it comes from
-# raspotify's prebuilt .deb - so the monthly rebuild is what keeps it current
-# with raspotify releases and Debian security updates. Release tags build it too
-# so a fresh checkout always has a matching image to pull, and so the producer
-# can be pinned to the same version as the streamer.
-#
-# Note there is no paths filter: within a single push event GitHub ANDs tags and
-# paths, so combining them would mean the workflow only ran when a tag and a
-# Dockerfile change landed together. Edit the Dockerfile without tagging and run
-# it by hand instead.
+# Optional Spotify producer for docker/compose.spotify.yml, separate lifecycle.
+# Content comes from raspotify upstream, so the monthly cron is what keeps it
+# current. No paths filter: GitHub ANDs tags and paths within one push event.
 
 on:
   workflow_dispatch:
@@ -45,9 +32,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # The image installs packages for the target architecture, so the non-x86
-      # builds run under emulation. That is only a download and an extract, not
-      # a compile, so it stays cheap.
+      # Packages are installed for the target arch, so non-x86 runs emulated.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:

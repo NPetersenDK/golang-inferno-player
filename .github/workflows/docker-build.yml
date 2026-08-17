@@ -15,13 +15,7 @@ env:
   IMAGE_NAME: npetersendk/golang-inferno-player
 
 jobs:
-  # ----------------------------------------------------------------------------
-  # Job 1: Test & Lint Go Stream Engine
-  #
-  # Runs alongside the image builds rather than gating them, so it costs no wall
-  # clock. Publishing the multi-arch manifest still waits for it, so a failing
-  # test never becomes a tagged release.
-  # ----------------------------------------------------------------------------
+  # Runs alongside the builds; only the manifest waits for it.
   test-go:
     name: Test Go Web Player
     runs-on: ubuntu-latest
@@ -42,9 +36,6 @@ jobs:
       - name: Run unit tests
         run: go test ./...
 
-  # ----------------------------------------------------------------------------
-  # Job 2: Build Architectures in Parallel on Separate Runners
-  # ----------------------------------------------------------------------------
   build-arch:
     name: Build (${{ matrix.platform }})
     runs-on: ubuntu-latest
@@ -62,8 +53,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Only the Debian runtime stage executes target-architecture commands;
-      # the Go and Rust builds are cross-compiled on the build platform.
+      # Only the Debian runtime stage runs target-arch commands; the rest is
+      # cross-compiled.
       - name: Set up QEMU
         if: matrix.platform == 'linux/arm64'
         uses: docker/setup-qemu-action@v3
@@ -96,12 +87,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           provenance: false
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          # Registry cache rather than type=gha. GitHub's Actions cache is scoped
-          # per ref, and this workflow only runs on tags, so a cache written
-          # while building v1.0.0 is invisible when building v1.0.1 - every
-          # release recompiled the Inferno ALSA module from scratch. A registry
-          # cache is shared by all runs. It is only an optimisation: if the
-          # cache tag is missing or stale the build still succeeds, just slower.
+          # Registry cache, not type=gha: that one is scoped per ref and this only
+          # runs on tags, so every release rebuilt the ALSA module from scratch.
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ steps.platform-tag.outputs.arch }}
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ steps.platform-tag.outputs.arch }},mode=max
 
@@ -119,9 +106,6 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # ----------------------------------------------------------------------------
-  # Job 3: Merge Architecture Manifests into Single Multi-Arch Image
-  # ----------------------------------------------------------------------------
   merge-manifests:
     name: Merge & Publish Multi-Arch Manifest
     needs: [build-arch, test-go]
