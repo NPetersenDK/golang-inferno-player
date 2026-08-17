@@ -2,6 +2,12 @@
 
 A web interface and audio streamer for Raspberry Pi and Linux that streams web radio, HLS, AAC, and MP3 audio directly into a Dante Audio over IP (AoIP) network using Inferno.
 
+## Disclaimer
+
+There is no security here. The web interface and the REST API have no login, so anyone who can reach the port can start, stop and reroute audio. Keep it on a network you trust.
+
+**AI was used heavily to build this.**
+
 ## Overview
 
 - Persistent Dante Device: Maintains a fixed device identity and transmit channels in Dante Controller. When streams start or stop, the system outputs digital silence so Dante flows and clock synchronization remain locked.
