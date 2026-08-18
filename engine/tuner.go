@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"dante-player/config"
 )
@@ -21,6 +22,10 @@ const (
 	tunerOutputRate = 48000
 	tunerAudioHz    = 15000
 )
+
+// How long to wait for the zone to have the FIFO open before giving up. A var
+// so the test for that path does not have to sit and wait it out.
+var fifoOpenTimeout = 5 * time.Second
 
 // TunerState is what the UI and API see.
 type TunerState struct {
@@ -41,10 +46,15 @@ type Tuner struct {
 	zoneID   int
 	zoneRate int
 
+	// One tune at a time. Held across process startup, which can block, so it
+	// is never the lock the API waits behind.
+	tuneMu sync.Mutex
+
+	// mu guards the fields below and is never held across a blocking call:
+	// State() takes it, and /api/status takes State().
 	mu      sync.Mutex
 	cmd     *exec.Cmd // rtl_fm
 	filter  *exec.Cmd // ffmpeg, between rtl_fm and the FIFO
-	sink    *os.File
 	preset  string
 	freqHz  int64
 	lastErr string
@@ -168,15 +178,15 @@ func checkFrequency(hz int64) error {
 }
 
 func (t *Tuner) tune(presetID string, hz int64) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.tuneMu.Lock()
+	defer t.tuneMu.Unlock()
 
-	t.stopLocked()
+	t.stop()
 
-	sink, err := os.OpenFile(t.fifoPath, os.O_WRONLY, 0)
+	sink, err := t.openSink()
 	if err != nil {
-		t.lastErr = fmt.Sprintf("open %s: %v", t.fifoPath, err)
-		return fmt.Errorf("%s", t.lastErr)
+		t.setError(err.Error())
+		return err
 	}
 
 	args := []string{
@@ -199,8 +209,7 @@ func (t *Tuner) tune(presetID string, hz int64) error {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		_ = sink.Close()
-		t.lastErr = fmt.Sprintf("pipe: %v", err)
-		return fmt.Errorf("%s", t.lastErr)
+		return t.setError(fmt.Sprintf("pipe: %v", err))
 	}
 
 	filter := exec.Command("ffmpeg", t.filterArgs()...)
@@ -215,38 +224,41 @@ func (t *Tuner) tune(presetID string, hz int64) error {
 	if err := filter.Start(); err != nil {
 		_, _ = pr.Close(), pw.Close()
 		_ = sink.Close()
-		t.lastErr = fmt.Sprintf("start ffmpeg: %v", err)
-		return fmt.Errorf("%s", t.lastErr)
+		return t.setError(fmt.Sprintf("start ffmpeg: %v", err))
 	}
 	if err := cmd.Start(); err != nil {
 		_ = filter.Process.Kill()
 		_ = filter.Wait()
 		_, _ = pr.Close(), pw.Close()
 		_ = sink.Close()
-		t.lastErr = fmt.Sprintf("start rtl_fm: %v", err)
-		return fmt.Errorf("%s", t.lastErr)
+		return t.setError(fmt.Sprintf("start rtl_fm: %v", err))
 	}
-	// The children hold their own descriptors now; ours have to go, or ffmpeg
-	// never sees EOF when rtl_fm stops.
+	// The children hold their own copies now. Ours have to go, or ffmpeg never
+	// sees EOF when rtl_fm stops, and the zone never sees it when ffmpeg does.
 	_, _ = pr.Close(), pw.Close()
+	_ = sink.Close()
 
-	t.cmd, t.filter, t.sink = cmd, filter, sink
+	t.mu.Lock()
+	t.cmd, t.filter = cmd, filter
 	t.preset, t.freqHz, t.lastErr = presetID, hz, ""
+	t.mu.Unlock()
 	log.Printf("[Tuner] tuned to %.3f MHz", float64(hz)/1e6)
 
+	// The only Wait on these two, so nothing else can block on a process this
+	// goroutine has already reaped.
 	go func() {
 		_ = cmd.Wait()
+		if filter.Process != nil {
+			_ = filter.Process.Kill()
+		}
+		_ = filter.Wait()
+
 		t.mu.Lock()
 		if t.cmd == cmd {
-			t.cmd = nil
+			t.cmd, t.filter = nil, nil
 			t.lastErr = "receiver exited"
-			if t.filter == filter {
-				_ = filter.Process.Kill()
-				t.filter = nil
-			}
 		}
 		t.mu.Unlock()
-		_ = filter.Wait()
 		t.changed()
 	}()
 
@@ -254,32 +266,73 @@ func (t *Tuner) tune(presetID string, hz int64) error {
 	return nil
 }
 
+// openSink opens the FIFO the zone reads from. That blocks until the zone has
+// its end open, so it happens without the state lock and gives up rather than
+// leaving the API waiting behind it forever.
+func (t *Tuner) openSink() (*os.File, error) {
+	type opened struct {
+		file *os.File
+		err  error
+	}
+	ch := make(chan opened, 1)
+	go func() {
+		f, err := os.OpenFile(t.fifoPath, os.O_WRONLY, 0)
+		ch <- opened{f, err}
+	}()
+
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return nil, fmt.Errorf("open %s: %w", t.fifoPath, r.err)
+		}
+		return r.file, nil
+	case <-time.After(fifoOpenTimeout):
+		// If a reader ever turns up, that goroutine returns and tidies up.
+		go func() {
+			if r := <-ch; r.file != nil {
+				_ = r.file.Close()
+			}
+		}()
+		return nil, fmt.Errorf("nothing is reading %s after %s: is zone %d running?",
+			t.fifoPath, fifoOpenTimeout, t.zoneID)
+	}
+}
+
+// setError records why a tune failed and returns it for the caller to pass on.
+func (t *Tuner) setError(msg string) error {
+	t.mu.Lock()
+	t.lastErr = msg
+	t.mu.Unlock()
+	return fmt.Errorf("%s", msg)
+}
+
 // Off stops the receiver, leaving the zone silent.
 func (t *Tuner) Off() {
 	if t == nil {
 		return
 	}
+	t.tuneMu.Lock()
+	t.stop()
 	t.mu.Lock()
-	t.stopLocked()
 	t.preset, t.freqHz = "", 0
 	t.mu.Unlock()
+	t.tuneMu.Unlock()
 	t.changed()
 }
 
-func (t *Tuner) stopLocked() {
-	if t.cmd != nil && t.cmd.Process != nil {
-		_ = t.cmd.Process.Kill()
-		_ = t.cmd.Wait()
+// stop kills the receiver but does not reap it: the goroutine tune started is
+// the only Wait, so no two callers ever wait on the same process.
+func (t *Tuner) stop() {
+	t.mu.Lock()
+	cmd, filter := t.cmd, t.filter
+	t.cmd, t.filter = nil, nil
+	t.mu.Unlock()
+
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
 	}
-	t.cmd = nil
-	if t.filter != nil && t.filter.Process != nil {
-		_ = t.filter.Process.Kill()
-		_ = t.filter.Wait()
-	}
-	t.filter = nil
-	if t.sink != nil {
-		_ = t.sink.Close()
-		t.sink = nil
+	if filter != nil && filter.Process != nil {
+		_ = filter.Process.Kill()
 	}
 }
 
