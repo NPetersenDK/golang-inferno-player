@@ -215,6 +215,17 @@ The `device` setting takes either that index or the serial, matched exactly or b
 
 Then give a zone a realtime pipe source and add a `tuner` block naming it — see `config.example.yaml`. `realtime: true` matters: an SDR keeps sampling whether you read it or not, so blocking it overruns its buffer. That flag makes the zone drop the oldest chunk instead, exactly as it does for a live network stream.
 
+The receiver runs at a fixed 240 kHz in and 48 kHz out, and the audio passes through FFmpeg with a 15 kHz low pass before it reaches the pipe. Broadcast FM carries nothing above 15 kHz except the 19 kHz stereo pilot, and at rtl_fm's own 32 kHz default that pilot folds down to 13 kHz and whistles behind the programme. The zone's source must therefore say `sample_rate: 48000`, which the tuner checks at startup.
+
+`rtl_fm` delivers around -20 dBFS and a zone's volume can only attenuate, so `boost_db` lifts the level in the same FFmpeg stage. Measure the headroom before raising it:
+
+```
+docker exec dante-streamer sh -c 'timeout 8 rtl_fm -d 0 -f 94.4M -M wbfm -s 240k -r 48k -g 19.2 - > /tmp/t.raw'
+docker exec dante-streamer ffmpeg -f s16le -ar 48000 -ac 1 -i /tmp/t.raw -af volumedetect -f null -
+```
+
+`max_volume` is how much room is left. Gain is not free either: `rtl_test -t` prints the values the tuner chip supports, and an FC0012 has five of them ending at 19.2 dB where an R820T2 has 29 up to about 49 dB.
+
 One dongle tunes one frequency at a time, so FM and DAB+ cannot run in parallel from a single stick. Retuning restarts the receiver, which costs the zone its prebuffer: it reports idle for a moment and comes back on its own. With squelch enabled for scanner use, the zone shows **Waiting** between transmissions and **Playing** when there is traffic.
 
 ## Soundboard

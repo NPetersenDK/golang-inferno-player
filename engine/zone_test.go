@@ -343,28 +343,23 @@ func TestAutoGainOmitsTheFlag(t *testing.T) {
 	}
 }
 
-// Which rate rtl_fm settles on varies by build, so it must be read from its output.
-func TestOutputRateMismatchIsDetected(t *testing.T) {
-	var lines []string
-	tuner := &Tuner{zoneID: 3, zoneRate: 32000}
-	writer := logWriter{prefix: "[Tuner]", inspect: func(line string) {
-		lines = append(lines, line)
-		tuner.checkOutputRate(line)
-	}}
-
-	if _, err := writer.Write([]byte("Output at 170000 Hz.\nAllocating 15 zero-copy buffers\n")); err != nil {
-		t.Fatal(err)
+// The 19 kHz stereo pilot lands in the audio unless it is filtered out, and a
+// zone's volume can only attenuate, so the level has to be lifted before the FIFO.
+func TestFilterArgsCutThePilotAndCanLift(t *testing.T) {
+	plain := strings.Join((&Tuner{}).filterArgs(), " ")
+	if !strings.Contains(plain, "lowpass=f=15000") {
+		t.Errorf("nothing cuts the pilot: %q", plain)
 	}
-	if len(lines) != 2 {
-		t.Errorf("forwarded %d lines, want 2", len(lines))
+	if strings.Contains(plain, "volume=") {
+		t.Errorf("the level was changed without being asked: %q", plain)
+	}
+	if !strings.Contains(plain, "-ar 48000") {
+		t.Errorf("not the rate the zone is told about: %q", plain)
 	}
 
-	// Only the parse is asserted; the warning itself goes to the log.
-	if m := rtlOutputRate.FindStringSubmatch("Output at 170000 Hz."); m == nil || m[1] != "170000" {
-		t.Errorf("failed to read the rate out of rtl_fm's line: %v", m)
-	}
-	if rtlOutputRate.MatchString("Sampling at 1020000 S/s.") {
-		t.Error("matched the capture rate line, which is a different number")
+	boosted := strings.Join((&Tuner{cfg: config.TunerConfig{BoostDB: 10}}).filterArgs(), " ")
+	if !strings.Contains(boosted, "volume=10dB") {
+		t.Errorf("boost_db never reached ffmpeg: %q", boosted)
 	}
 }
 

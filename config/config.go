@@ -73,7 +73,10 @@ type TunerConfig struct {
 	Device string `json:"device,omitempty" yaml:"device,omitempty"`
 	Gain   string `json:"gain,omitempty" yaml:"gain,omitempty"`
 	// In rtl_fm's own units; zero leaves it open, which is what broadcast FM wants.
-	Squelch int           `json:"squelch,omitempty" yaml:"squelch,omitempty"`
+	Squelch int `json:"squelch,omitempty" yaml:"squelch,omitempty"`
+	// Gain in dB applied after demodulation. rtl_fm delivers around -20 dBFS and
+	// a zone's volume can only attenuate, so lift it here.
+	BoostDB float64       `json:"boost_db,omitempty" yaml:"boost_db,omitempty"`
 	Presets []TunerPreset `json:"presets,omitempty" yaml:"presets,omitempty"`
 }
 

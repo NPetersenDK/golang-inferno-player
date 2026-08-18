@@ -77,10 +77,7 @@ zones:
 #       label: "Radio"
 #       realtime: true      # an SDR cannot be paused, so never block it
 #       format: s16le
-#       # Must match rtl_fm's own "Output at N Hz." line, which differs between
-#       # builds. A mismatch just sounds like a bad signal, so the tuner logs
-#       # RATE MISMATCH instead.
-#       sample_rate: 170000
+#       sample_rate: 48000  # the tuner emits 48 kHz; anything else sounds wrong
 #       channels: 1         # mono; FFmpeg upmixes to stereo
 #
 # Retuning restarts the receiver, so the zone goes quiet for a moment.
@@ -92,8 +89,14 @@ zones:
 #   enabled: false
 #   zone_id: 3
 #   device: "0"           # or a serial, e.g. "dante-fm"
-#   gain: "auto"          # or dB as a number, e.g. "28.0"
+#   gain: "auto"          # or dB as a number, e.g. "28.0". rtl_test -t lists
+#                         # what the tuner chip actually supports; it snaps to
+#                         # the nearest, so ask for more than it has and you
+#                         # silently get less.
 #   squelch: 0            # nonzero gates the audio, for scanner use
+#   boost_db: 10          # rtl_fm lands around -20 dBFS and a zone's volume can
+#                         # only attenuate, so lift it here. Check headroom with
+#                         # ffmpeg -af volumedetect before going higher.
 #   presets:
 #     # In hertz, not megahertz: 96.4 MHz is 96400000, eight digits. The UI's
 #     # manual field takes megahertz instead, so 96.4 there.

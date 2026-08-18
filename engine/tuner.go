@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,9 +12,15 @@ import (
 	"dante-player/config"
 )
 
-// Which rate -M wbfm settles on varies between builds, so read the rate rtl_fm
-// announces on stderr instead of guessing.
-var rtlOutputRate = regexp.MustCompile(`Output at (\d+) Hz`)
+// Broadcast FM, fixed rather than left to rtl_fm's own defaults: 240 kHz in
+// decimates evenly by 5 to the 48 kHz Dante runs at, and everything above
+// 15 kHz is the 19 kHz stereo pilot and noise, never programme. Left at the
+// -M wbfm default of 32 kHz out, that pilot folds down to 13 kHz and whistles.
+const (
+	tunerInputRate  = 240000
+	tunerOutputRate = 48000
+	tunerAudioHz    = 15000
+)
 
 // TunerState is what the UI and API see.
 type TunerState struct {
@@ -37,7 +42,8 @@ type Tuner struct {
 	zoneRate int
 
 	mu      sync.Mutex
-	cmd     *exec.Cmd
+	cmd     *exec.Cmd // rtl_fm
+	filter  *exec.Cmd // ffmpeg, between rtl_fm and the FIFO
 	sink    *os.File
 	preset  string
 	freqHz  int64
@@ -67,8 +73,13 @@ func NewTuner(cfg *config.AppConfig, notify func()) *Tuner {
 		log.Printf("[Tuner] zone %d source is not marked realtime; an SDR cannot be paused and will overrun", zone.ID)
 	}
 	if zone.Source.Channels != 1 || zone.Source.Format != "s16le" {
-		log.Printf("[Tuner] zone %d source is %s %d ch, but rtl_fm emits s16le mono",
+		log.Printf("[Tuner] zone %d source is %s %d ch, but the tuner emits s16le mono",
 			zone.ID, zone.Source.Format, zone.Source.Channels)
+	}
+	if zone.Source.SampleRate != tunerOutputRate {
+		log.Printf("[Tuner] zone %d declares %d Hz but the tuner emits %d Hz. "+
+			"Set sample_rate: %d on that source, or it will only ever sound like noise.",
+			zone.ID, zone.Source.SampleRate, tunerOutputRate, tunerOutputRate)
 	}
 
 	t := &Tuner{
@@ -168,12 +179,12 @@ func (t *Tuner) tune(presetID string, hz int64) error {
 		return fmt.Errorf("%s", t.lastErr)
 	}
 
-	// No -s/-r of our own: overriding them yields a stream at a rate the zone was
-	// never told about.
 	args := []string{
 		"-d", t.deviceArg(),
 		"-f", strconv.FormatInt(hz, 10),
 		"-M", "wbfm",
+		"-s", strconv.Itoa(tunerInputRate),
+		"-r", strconv.Itoa(tunerOutputRate),
 	}
 	if t.usesGainFlag() {
 		args = append(args, "-g", t.cfg.Gain)
@@ -183,16 +194,44 @@ func (t *Tuner) tune(presetID string, hz int64) error {
 	}
 	args = append(args, "-")
 
+	// rtl_fm writes into ffmpeg, which filters and lifts before the FIFO. Both
+	// ends are *os.File, so the kernel joins them and nothing is copied here.
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		_ = sink.Close()
+		t.lastErr = fmt.Sprintf("pipe: %v", err)
+		return fmt.Errorf("%s", t.lastErr)
+	}
+
+	filter := exec.Command("ffmpeg", t.filterArgs()...)
+	filter.Stdin = pr
+	filter.Stdout = sink
+	filter.Stderr = logWriter{prefix: "[Tuner/ffmpeg]"}
+
 	cmd := exec.Command("rtl_fm", args...)
-	cmd.Stdout = sink
-	cmd.Stderr = logWriter{prefix: "[Tuner]", inspect: t.checkOutputRate}
+	cmd.Stdout = pw
+	cmd.Stderr = logWriter{prefix: "[Tuner]"}
+
+	if err := filter.Start(); err != nil {
+		_, _ = pr.Close(), pw.Close()
+		_ = sink.Close()
+		t.lastErr = fmt.Sprintf("start ffmpeg: %v", err)
+		return fmt.Errorf("%s", t.lastErr)
+	}
 	if err := cmd.Start(); err != nil {
+		_ = filter.Process.Kill()
+		_ = filter.Wait()
+		_, _ = pr.Close(), pw.Close()
 		_ = sink.Close()
 		t.lastErr = fmt.Sprintf("start rtl_fm: %v", err)
 		return fmt.Errorf("%s", t.lastErr)
 	}
+	// The children hold their own descriptors now; ours have to go, or ffmpeg
+	// never sees EOF when rtl_fm stops.
+	_, _ = pr.Close(), pw.Close()
 
-	t.cmd, t.sink, t.preset, t.freqHz, t.lastErr = cmd, sink, presetID, hz, ""
+	t.cmd, t.filter, t.sink = cmd, filter, sink
+	t.preset, t.freqHz, t.lastErr = presetID, hz, ""
 	log.Printf("[Tuner] tuned to %.3f MHz", float64(hz)/1e6)
 
 	go func() {
@@ -201,8 +240,13 @@ func (t *Tuner) tune(presetID string, hz int64) error {
 		if t.cmd == cmd {
 			t.cmd = nil
 			t.lastErr = "receiver exited"
+			if t.filter == filter {
+				_ = filter.Process.Kill()
+				t.filter = nil
+			}
 		}
 		t.mu.Unlock()
+		_ = filter.Wait()
 		t.changed()
 	}()
 
@@ -228,6 +272,11 @@ func (t *Tuner) stopLocked() {
 		_ = t.cmd.Wait()
 	}
 	t.cmd = nil
+	if t.filter != nil && t.filter.Process != nil {
+		_ = t.filter.Process.Kill()
+		_ = t.filter.Wait()
+	}
+	t.filter = nil
 	if t.sink != nil {
 		_ = t.sink.Close()
 		t.sink = nil
@@ -240,26 +289,25 @@ func (t *Tuner) changed() {
 	}
 }
 
-// checkOutputRate flags a rate mismatch loudly, because in the audio it only
-// sounds like a bad signal.
-func (t *Tuner) checkOutputRate(line string) {
-	m := rtlOutputRate.FindStringSubmatch(line)
-	if m == nil {
-		return
+// filterArgs builds the ffmpeg stage: cut everything above the 15 kHz FM audio
+// band, then lift the level if the config asks for it.
+func (t *Tuner) filterArgs() []string {
+	af := fmt.Sprintf("lowpass=f=%d", tunerAudioHz)
+	if t.cfg.BoostDB != 0 {
+		af += ",volume=" + strconv.FormatFloat(t.cfg.BoostDB, 'g', -1, 64) + "dB"
 	}
-	rate, err := strconv.Atoi(m[1])
-	if err != nil || rate == t.zoneRate {
-		return
+	rate := strconv.Itoa(tunerOutputRate)
+	return []string{
+		"-hide_banner", "-loglevel", "error",
+		"-f", "s16le", "-ar", rate, "-ac", "1", "-i", "-",
+		"-af", af,
+		"-f", "s16le", "-ar", rate, "-ac", "1", "-",
 	}
-	log.Printf("[Tuner] RATE MISMATCH: rtl_fm outputs %d Hz but zone %d declares %d Hz. "+
-		"Set sample_rate: %d on that source, or it will only ever sound like noise.",
-		rate, t.zoneID, t.zoneRate, rate)
 }
 
 // logWriter forwards a child's stderr into our log a line at a time.
 type logWriter struct {
-	prefix  string
-	inspect func(line string)
+	prefix string
 }
 
 func (w logWriter) Write(p []byte) (int, error) {
@@ -268,9 +316,6 @@ func (w logWriter) Write(p []byte) (int, error) {
 			continue
 		}
 		log.Printf("%s %s", w.prefix, line)
-		if w.inspect != nil {
-			w.inspect(line)
-		}
 	}
 	return len(p), nil
 }
