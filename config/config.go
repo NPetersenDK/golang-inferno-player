@@ -59,10 +59,18 @@ type StationPreset struct {
 }
 
 type TunerPreset struct {
-	ID          string `json:"id" yaml:"id"`
-	Name        string `json:"name" yaml:"name"`
-	FrequencyHz int64  `json:"frequency_hz" yaml:"frequency_hz"`
+	ID   string `json:"id" yaml:"id"`
+	Name string `json:"name" yaml:"name"`
+	// "fm" when empty. Both modes share the one dongle, so only one plays.
+	Mode        string `json:"mode,omitempty" yaml:"mode,omitempty"`
+	FrequencyHz int64  `json:"frequency_hz,omitempty" yaml:"frequency_hz,omitempty"`
+	// DAB only: the ensemble channel ("12A") and which service in it to decode.
+	Channel   string `json:"channel,omitempty" yaml:"channel,omitempty"`
+	ServiceID string `json:"service_id,omitempty" yaml:"service_id,omitempty"`
 }
+
+// IsDAB reports the preset's mode, defaulting to FM so old configs keep working.
+func (p TunerPreset) IsDAB() bool { return strings.EqualFold(p.Mode, "dab") }
 
 // TunerConfig drives an SDR feeding one source zone. Off unless asked for.
 type TunerConfig struct {

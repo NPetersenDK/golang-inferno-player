@@ -449,6 +449,12 @@ func (m *PlaybackManager) TunePreset(id string) error { return m.tuner.TunePrese
 
 func (m *PlaybackManager) TuneFrequency(hz int64) error { return m.tuner.TuneFrequency(hz) }
 
+func (m *PlaybackManager) TuneDAB(channel, serviceID string) error {
+	return m.tuner.TuneDAB(channel, serviceID)
+}
+
+func (m *PlaybackManager) TunerServices() ([]byte, error) { return m.tuner.Services() }
+
 func (m *PlaybackManager) TunerOff() { m.tuner.Off() }
 
 func (m *PlaybackManager) clockStatus() (stats PTPStats, clock string, ptp string) {

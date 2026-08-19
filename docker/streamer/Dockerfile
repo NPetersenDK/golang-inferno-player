@@ -79,6 +79,24 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       mkdir -p /out && cp target/release/libasound_module_pcm_inferno.so /out/; \
     fi
 
+# Debian's welle.io package drags in all of Qt for a GUI nothing here runs, so
+# only the CLI is built. It is the DAB+ receiver; rtl_fm covers FM.
+# Not $BUILDPLATFORM: this stage runs emulated on an arm64 build, which is slow,
+# but a cross toolchain for it would be a second thing to keep working.
+FROM debian:bookworm-slim AS welle-builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git ca-certificates pkg-config \
+    libfftw3-dev libfaad-dev libmp3lame-dev libmpg123-dev librtlsdr-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 https://github.com/AlbrechtL/welle.io /build/welle.io && \
+    cmake -S /build/welle.io -B /build/out \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_WELLE_IO=OFF \
+      -DBUILD_WELLE_CLI=ON \
+      -DRTLSDR=ON && \
+    cmake --build /build/out -j"$(nproc)" && \
+    strip /build/out/welle-cli
+
 # Runtime. No PTP daemon: dante-player measures the grandmaster itself.
 FROM debian:bookworm-slim
 
@@ -92,7 +110,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
     curl \
     rtl-sdr \
+    libfftw3-single3 \
+    libfaad2 \
+    libmp3lame0 \
+    libmpg123-0 \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=welle-builder /build/out/welle-cli /usr/local/bin/welle-cli
 
 # Plugin dir is multiarch-specific, so ask dpkg rather than hardcode it.
 COPY --from=inferno-builder /out/libasound_module_pcm_inferno.so /tmp/libasound_module_pcm_inferno.so

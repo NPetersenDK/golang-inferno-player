@@ -223,16 +223,31 @@ func (s *Server) handleZoneAction(w http.ResponseWriter, r *http.Request) {
 type TuneRequest struct {
 	PresetID    string `json:"preset_id,omitempty"`
 	FrequencyHz int64  `json:"frequency_hz,omitempty"`
+	Channel     string `json:"channel,omitempty"`
+	ServiceID   string `json:"service_id,omitempty"`
 }
 
-// Tuner state rides along in /api/status, so this only handles commands.
+// Tuner state rides along in /api/status, so this only handles commands, plus
+// the DAB ensemble listing, which is too large to broadcast with every update.
 func (s *Server) handleTuner(w http.ResponseWriter, r *http.Request) {
+	action := strings.TrimPrefix(r.URL.Path, "/api/tuner/")
+
+	if action == "services" {
+		mux, err := s.mgr.TunerServices()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(mux)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	action := strings.TrimPrefix(r.URL.Path, "/api/tuner/")
 	var err error
 	switch action {
 	case "tune":
@@ -244,10 +259,12 @@ func (s *Server) handleTuner(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case req.PresetID != "":
 			err = s.mgr.TunePreset(req.PresetID)
+		case req.Channel != "":
+			err = s.mgr.TuneDAB(req.Channel, req.ServiceID)
 		case req.FrequencyHz > 0:
 			err = s.mgr.TuneFrequency(req.FrequencyHz)
 		default:
-			http.Error(w, "Either preset_id or frequency_hz required", http.StatusBadRequest)
+			http.Error(w, "Either preset_id, frequency_hz or channel required", http.StatusBadRequest)
 			return
 		}
 	case "off":
