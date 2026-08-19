@@ -225,7 +225,7 @@ function renderTuner() {
 
   const mhz = tuner.frequency_hz ? (tuner.frequency_hz / 1e6).toFixed(1) : null;
   const tunedTo = tuner.mode === "dab"
-    ? `${escapeHtml(tuner.channel)} · service ${escapeHtml(tuner.service_id)}`
+    ? `${escapeHtml(tuner.channel)}${tuner.service_id ? ` · service ${escapeHtml(tuner.service_id)}` : " · no service selected"}`
     : `${mhz} MHz`;
   const status = tuner.error
     ? `<span class="text-danger">${escapeHtml(tuner.error)}</span>`
@@ -286,6 +286,27 @@ function renderTuner() {
   panel.querySelector(".js-scan").addEventListener("click", async () => {
     const out = panel.querySelector(".js-services");
     out.hidden = false;
+
+    // Listing needs a locked ensemble, so tune the channel first when the tuner
+    // is elsewhere. No service is decoded by that, it only locks the mux.
+    const channel = panel.querySelector(".js-chan").value.trim();
+    if (tuner.mode !== "dab" || tuner.channel !== channel) {
+      if (!channel) {
+        out.textContent = "Enter a channel first, e.g. 12A.";
+        return;
+      }
+      out.textContent = `Locking onto ${channel}, this takes a few seconds...`;
+      const tuned = await fetch("/api/tuner/tune", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel })
+      });
+      if (!tuned.ok) {
+        out.textContent = await tuned.text();
+        return;
+      }
+    }
+
     out.textContent = "Reading ensemble...";
     const resp = await fetch("/api/tuner/services");
     out.textContent = resp.ok

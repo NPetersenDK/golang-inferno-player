@@ -195,13 +195,15 @@ func (t *Tuner) TuneFrequency(hz int64) error {
 	return t.tune("", hz)
 }
 
-// TuneDAB tunes to a service in an arbitrary ensemble, e.g. "12A" and "0x9001".
+// TuneDAB tunes to a service in an ensemble, e.g. "12A" and "0x9001". An empty
+// serviceID locks the ensemble without decoding anything, which is how the
+// service IDs are discovered in the first place.
 func (t *Tuner) TuneDAB(channel, serviceID string) error {
 	if t == nil {
 		return fmt.Errorf("tuner is not enabled")
 	}
-	if channel == "" || serviceID == "" {
-		return fmt.Errorf("both channel and service_id are required")
+	if channel == "" {
+		return fmt.Errorf("a channel is required, e.g. 12A")
 	}
 	return t.tuneDAB("", channel, serviceID)
 }
@@ -317,9 +319,18 @@ func (t *Tuner) tuneDAB(presetID, channel, serviceID string) error {
 		return t.setError(err.Error())
 	}
 
-	url := fmt.Sprintf("http://127.0.0.1:%d/mp3/%s", dabPort, serviceID)
-	if err := t.launch(cmd, "welle-cli", dabFilterArgs(url, t.cfg.BoostDB), sink, false); err != nil {
-		return err
+	if serviceID == "" {
+		// Ensemble only. Nothing is decoded, but Services() can now be read, which
+		// is the only way to learn the service IDs a preset needs.
+		_ = sink.Close()
+		t.adopt(cmd, nil)
+		log.Printf("[Tuner] DAB locked onto %s, no service selected", channel)
+	} else {
+		url := fmt.Sprintf("http://127.0.0.1:%d/mp3/%s", dabPort, serviceID)
+		if err := t.launch(cmd, "welle-cli", dabFilterArgs(url, t.cfg.BoostDB), sink, false); err != nil {
+			return err
+		}
+		log.Printf("[Tuner] DAB tuned to %s service %s", channel, serviceID)
 	}
 
 	t.mu.Lock()
@@ -327,7 +338,6 @@ func (t *Tuner) tuneDAB(presetID, channel, serviceID string) error {
 	t.channel, t.service, t.freqHz, t.lastErr = channel, serviceID, 0, ""
 	t.mu.Unlock()
 
-	log.Printf("[Tuner] DAB tuned to %s service %s", channel, serviceID)
 	t.changed()
 	return nil
 }
@@ -376,18 +386,26 @@ func (t *Tuner) launch(cmd *exec.Cmd, name string, filterArgs []string, sink *os
 	// sees EOF when the receiver stops, and the zone never sees it when ffmpeg does.
 	cleanup()
 
+	t.adopt(cmd, filter)
+	return nil
+}
+
+// adopt records the running pair and reaps it. The goroutine started here is the
+// only Wait on either process, so nothing else can block on one already reaped.
+// filter is nil when the receiver runs without a decoder behind it.
+func (t *Tuner) adopt(cmd, filter *exec.Cmd) {
 	t.mu.Lock()
 	t.cmd, t.filter = cmd, filter
 	t.mu.Unlock()
 
-	// The only Wait on these two, so nothing else can block on a process this
-	// goroutine has already reaped.
 	go func() {
 		_ = cmd.Wait()
-		if filter.Process != nil {
-			_ = filter.Process.Kill()
+		if filter != nil {
+			if filter.Process != nil {
+				_ = filter.Process.Kill()
+			}
+			_ = filter.Wait()
 		}
-		_ = filter.Wait()
 
 		t.mu.Lock()
 		if t.cmd == cmd {
@@ -397,7 +415,6 @@ func (t *Tuner) launch(cmd *exec.Cmd, name string, filterArgs []string, sink *os
 		t.mu.Unlock()
 		t.changed()
 	}()
-	return nil
 }
 
 // waitForEnsemble polls welle-cli until it reports a service. It deliberately
