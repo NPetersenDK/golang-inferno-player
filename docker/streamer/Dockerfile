@@ -79,24 +79,17 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       mkdir -p /out && cp target/release/libasound_module_pcm_inferno.so /out/; \
     fi
 
-# Debian's welle.io package drags in all of Qt for a GUI nothing here runs, so
-# only the CLI is built. It is the DAB+ receiver; rtl_fm covers FM.
-# Not $BUILDPLATFORM: this stage runs emulated on an arm64 build, which is slow,
-# but a cross toolchain for it would be a second thing to keep working.
+# welle-cli is the DAB+ receiver; rtl_fm still covers FM. Debian ships it inside
+# the welle.io package, whose Depends pull all of Qt5 in for a GUI nothing here
+# runs, so the package is unpacked rather than installed and only the CLI kept.
+# Not built from source: that needs an emulated C++ build on arm64.
 FROM debian:bookworm-slim AS welle-builder
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake git ca-certificates pkg-config \
-    libfftw3-dev libfaad-dev libmp3lame-dev libmpg123-dev librtlsdr-dev \
-    xxd \
-    && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 https://github.com/AlbrechtL/welle.io /build/welle.io && \
-    cmake -S /build/welle.io -B /build/out \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DBUILD_WELLE_IO=OFF \
-      -DBUILD_WELLE_CLI=ON \
-      -DRTLSDR=ON && \
-    cmake --build /build/out -j"$(nproc)" && \
-    strip /build/out/welle-cli
+# apt-get download drops privileges to _apt, which cannot write to /.
+WORKDIR /tmp
+RUN apt-get update && \
+    apt-get download welle.io && \
+    dpkg-deb -x welle.io_*.deb /tmp/welle && \
+    rm -rf /var/lib/apt/lists/*
 
 # Runtime. No PTP daemon: dante-player measures the grandmaster itself.
 FROM debian:bookworm-slim
@@ -115,9 +108,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfaad2 \
     libmp3lame0 \
     libmpg123-0 \
+    libairspy0 \
+    libsoapysdr0.8 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=welle-builder /build/out/welle-cli /usr/local/bin/welle-cli
+# Debian builds welle-cli with every input driver, so its shared libraries come
+# along even though only rtl_sdr is used.
+COPY --from=welle-builder /tmp/welle/usr/bin/welle-cli /usr/local/bin/welle-cli
+# Catch a missing shared library before publishing, not on the Pi at tune time.
+# ldd rather than --version: it names what is missing and does not depend on the
+# exit code of a help flag.
+RUN ! ldd /usr/local/bin/welle-cli | grep 'not found'
 
 # Plugin dir is multiarch-specific, so ask dpkg rather than hardcode it.
 COPY --from=inferno-builder /out/libasound_module_pcm_inferno.so /tmp/libasound_module_pcm_inferno.so
