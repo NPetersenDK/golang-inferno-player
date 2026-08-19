@@ -224,32 +224,52 @@ function renderTuner() {
   panel.dataset.signature = signature;
 
   const mhz = tuner.frequency_hz ? (tuner.frequency_hz / 1e6).toFixed(1) : null;
+  const tunedTo = tuner.mode === "dab"
+    ? `${escapeHtml(tuner.channel)} · service ${escapeHtml(tuner.service_id)}`
+    : `${mhz} MHz`;
   const status = tuner.error
     ? `<span class="text-danger">${escapeHtml(tuner.error)}</span>`
     : tuner.tuned
-      ? `<span class="text-success">Tuned to ${mhz} MHz</span>`
+      ? `<span class="text-success">${tuner.mode === "dab" ? "DAB+" : "FM"} — ${tunedTo}</span>`
       : `<span class="text-muted">Off</span>`;
 
+  // One dongle serves both modes, so the presets are one list and picking any of
+  // them takes the tuner away from whatever it was doing.
   const presets = (tuner.presets || []).map(p => `
     <button class="btn btn-sm ${p.id === tuner.preset_id ? "btn-primary" : "btn-outline-secondary"} js-preset"
             data-preset="${escapeHtml(p.id)}">
-      ${escapeHtml(p.name)}
+      <span class="badge bg-secondary me-1">${p.mode === "dab" ? "DAB+" : "FM"}</span>${escapeHtml(p.name)}
     </button>`).join("");
 
   panel.innerHTML = `
     <div class="d-flex justify-content-between align-items-center mb-3">
-      <span class="fw-semibold"><i class="fa-solid fa-tower-broadcast me-1"></i> FM Tuner</span>
+      <span class="fw-semibold"><i class="fa-solid fa-tower-broadcast me-1"></i> Radio</span>
       <span class="small">${status}</span>
     </div>
 
     <div class="d-flex flex-wrap gap-2 mb-3">${presets || '<span class="text-muted small">No presets configured.</span>'}</div>
 
-    <div class="d-flex gap-2" style="max-width: 360px;">
+    <p class="text-muted small mb-2">FM and DAB+ share the one receiver, so only one plays at a time.</p>
+
+    <div class="d-flex gap-2 mb-2" style="max-width: 420px;">
       <input type="number" class="form-control form-control-sm js-freq" step="0.1" min="87.5" max="108"
-             placeholder="MHz" value="${mhz || ""}">
-      <button class="btn btn-sm btn-outline-primary text-nowrap js-tune">Tune</button>
+             placeholder="FM MHz" value="${mhz || ""}">
+      <button class="btn btn-sm btn-outline-primary text-nowrap js-tune">Tune FM</button>
+    </div>
+
+    <div class="d-flex gap-2 mb-2" style="max-width: 420px;">
+      <input type="text" class="form-control form-control-sm js-chan" placeholder="Channel, e.g. 12A"
+             value="${escapeHtml(tuner.channel || "")}">
+      <input type="text" class="form-control form-control-sm js-sid" placeholder="Service, e.g. 0x9001"
+             value="${escapeHtml(tuner.service_id || "")}">
+      <button class="btn btn-sm btn-outline-primary text-nowrap js-dab">Tune DAB+</button>
+    </div>
+
+    <div class="d-flex gap-2">
+      <button class="btn btn-sm btn-outline-secondary js-scan">List services</button>
       <button class="btn btn-sm btn-outline-danger js-off">Off</button>
-    </div>`;
+    </div>
+    <pre class="small mt-2 mb-0 js-services" hidden></pre>`;
 
   panel.querySelectorAll(".js-preset").forEach(btn => {
     btn.addEventListener("click", () => tune({ preset_id: btn.dataset.preset }));
@@ -257,6 +277,20 @@ function renderTuner() {
   panel.querySelector(".js-tune").addEventListener("click", () => {
     const mhzValue = parseFloat(panel.querySelector(".js-freq").value);
     if (!isNaN(mhzValue)) tune({ frequency_hz: Math.round(mhzValue * 1e6) });
+  });
+  panel.querySelector(".js-dab").addEventListener("click", () => {
+    const channel = panel.querySelector(".js-chan").value.trim();
+    const serviceID = panel.querySelector(".js-sid").value.trim();
+    if (channel && serviceID) tune({ channel, service_id: serviceID });
+  });
+  panel.querySelector(".js-scan").addEventListener("click", async () => {
+    const out = panel.querySelector(".js-services");
+    out.hidden = false;
+    out.textContent = "Reading ensemble...";
+    const resp = await fetch("/api/tuner/services");
+    out.textContent = resp.ok
+      ? JSON.stringify(await resp.json(), null, 2)
+      : await resp.text();
   });
   panel.querySelector(".js-off").addEventListener("click", () => {
     fetch("/api/tuner/off", { method: "POST" });

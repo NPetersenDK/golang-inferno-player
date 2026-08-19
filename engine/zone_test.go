@@ -346,7 +346,7 @@ func TestAutoGainOmitsTheFlag(t *testing.T) {
 // The 19 kHz stereo pilot lands in the audio unless it is filtered out, and a
 // zone's volume can only attenuate, so the level has to be lifted before the FIFO.
 func TestFilterArgsCutThePilotAndCanLift(t *testing.T) {
-	plain := strings.Join((&Tuner{}).filterArgs(), " ")
+	plain := strings.Join((&Tuner{}).fmFilterArgs(), " ")
 	if !strings.Contains(plain, "lowpass=f=15000") {
 		t.Errorf("nothing cuts the pilot: %q", plain)
 	}
@@ -357,9 +357,35 @@ func TestFilterArgsCutThePilotAndCanLift(t *testing.T) {
 		t.Errorf("not the rate the zone is told about: %q", plain)
 	}
 
-	boosted := strings.Join((&Tuner{cfg: config.TunerConfig{BoostDB: 10}}).filterArgs(), " ")
+	boosted := strings.Join((&Tuner{cfg: config.TunerConfig{BoostDB: 10}}).fmFilterArgs(), " ")
 	if !strings.Contains(boosted, "volume=10dB") {
 		t.Errorf("boost_db never reached ffmpeg: %q", boosted)
+	}
+}
+
+// Both modes feed the same FIFO, so they must agree on the wire format or the
+// zone's decoder is right for one of them and wrong for the other.
+func TestBothModesEmitTheSameWireFormat(t *testing.T) {
+	fm := strings.Join((&Tuner{}).fmFilterArgs(), " ")
+	dab := strings.Join(dabFilterArgs("http://127.0.0.1:7979/mp3/0x1", 0), " ")
+	for _, want := range []string{"-f s16le", "-ar 48000", "-ac 2"} {
+		if !strings.Contains(fm, want) {
+			t.Errorf("FM output is missing %q: %q", want, fm)
+		}
+		if !strings.Contains(dab, want) {
+			t.Errorf("DAB output is missing %q: %q", want, dab)
+		}
+	}
+}
+
+// A DAB preset without a service cannot be decoded, and welle-cli would sit and
+// serve an empty stream rather than fail.
+func TestDABPresetNeedsChannelAndService(t *testing.T) {
+	tuner := &Tuner{cfg: config.TunerConfig{
+		Presets: []config.TunerPreset{{ID: "dr-p1", Name: "DR P1", Mode: "dab", Channel: "12A"}},
+	}}
+	if err := tuner.TunePreset("dr-p1"); err == nil {
+		t.Fatal("a dab preset with no service_id was accepted")
 	}
 }
 

@@ -78,7 +78,7 @@ zones:
 #       realtime: true      # an SDR cannot be paused, so never block it
 #       format: s16le
 #       sample_rate: 48000  # the tuner emits 48 kHz; anything else sounds wrong
-#       channels: 1         # mono; FFmpeg upmixes to stereo
+#       channels: 2         # DAB+ is stereo, so the FM path upmixes to match
 #
 # Retuning restarts the receiver, so the zone goes quiet for a moment.
 #
@@ -103,6 +103,16 @@ zones:
 #     - id: "p4-trekanten"
 #       name: "P4 Trekanten"
 #       frequency_hz: 96400000
+#
+#     # DAB+ goes through welle-cli instead of rtl_fm, but shares the one dongle,
+#     # so tuning either mode stops the other. Read service_id off the ensemble
+#     # with the UI's "List services" button, or:
+#     #   curl -s localhost:8085/api/tuner/services
+#     - id: "dr-p1-dab"
+#       name: "DR P1"
+#       mode: dab
+#       channel: "12A"
+#       service_id: "0x9001"
 
 # Soundboard: every audio file in the directory becomes a pad, re-read as you go
 # so new files need no restart. Pads play over the zone rather than replacing its
