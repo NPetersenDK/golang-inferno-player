@@ -346,7 +346,7 @@ func TestAutoGainOmitsTheFlag(t *testing.T) {
 // The 19 kHz stereo pilot lands in the audio unless it is filtered out, and a
 // zone's volume can only attenuate, so the level has to be lifted before the FIFO.
 func TestFilterArgsCutThePilotAndCanLift(t *testing.T) {
-	plain := strings.Join((&Tuner{}).fmFilterArgs(), " ")
+	plain := strings.Join((&Tuner{}).filterArgs(), " ")
 	if !strings.Contains(plain, "lowpass=f=15000") {
 		t.Errorf("nothing cuts the pilot: %q", plain)
 	}
@@ -357,7 +357,7 @@ func TestFilterArgsCutThePilotAndCanLift(t *testing.T) {
 		t.Errorf("not the rate the zone is told about: %q", plain)
 	}
 
-	boosted := strings.Join((&Tuner{cfg: config.TunerConfig{BoostDB: 10}}).fmFilterArgs(), " ")
+	boosted := strings.Join((&Tuner{cfg: config.TunerConfig{BoostDB: 10}}).filterArgs(), " ")
 	if !strings.Contains(boosted, "volume=10dB") {
 		t.Errorf("boost_db never reached ffmpeg: %q", boosted)
 	}
@@ -366,7 +366,7 @@ func TestFilterArgsCutThePilotAndCanLift(t *testing.T) {
 // Both modes feed the same FIFO, so they must agree on the wire format or the
 // zone's decoder is right for one of them and wrong for the other.
 func TestBothModesEmitTheSameWireFormat(t *testing.T) {
-	fm := strings.Join((&Tuner{}).fmFilterArgs(), " ")
+	fm := strings.Join((&Tuner{}).filterArgs(), " ")
 	dab := strings.Join(dabFilterArgs("http://127.0.0.1:7979/mp3/0x1", 0), " ")
 	for _, want := range []string{"-f s16le", "-ar 48000", "-ac 2"} {
 		if !strings.Contains(fm, want) {

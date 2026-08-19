@@ -179,7 +179,7 @@ func (t *Tuner) TunePreset(id string) error {
 		if err := checkFrequency(p.FrequencyHz); err != nil {
 			return fmt.Errorf("preset %q: %w", id, err)
 		}
-		return t.tuneFM(p.ID, p.FrequencyHz)
+		return t.tune(p.ID, p.FrequencyHz)
 	}
 	return fmt.Errorf("unknown preset %q", id)
 }
@@ -192,7 +192,7 @@ func (t *Tuner) TuneFrequency(hz int64) error {
 	if err := checkFrequency(hz); err != nil {
 		return err
 	}
-	return t.tuneFM("", hz)
+	return t.tune("", hz)
 }
 
 // TuneDAB tunes to a service in an arbitrary ensemble, e.g. "12A" and "0x9001".
@@ -230,7 +230,7 @@ func checkFrequency(hz int64) error {
 	return nil
 }
 
-func (t *Tuner) tuneFM(presetID string, hz int64) error {
+func (t *Tuner) tune(presetID string, hz int64) error {
 	t.tuneMu.Lock()
 	defer t.tuneMu.Unlock()
 	t.stop()
@@ -259,7 +259,7 @@ func (t *Tuner) tuneFM(presetID string, hz int64) error {
 	cmd := exec.Command("rtl_fm", args...)
 	cmd.Stderr = logWriter{prefix: "[Tuner]"}
 
-	if err := t.launch(cmd, "rtl_fm", t.fmFilterArgs(), sink, true); err != nil {
+	if err := t.launch(cmd, "rtl_fm", t.filterArgs(), sink, true); err != nil {
 		return err
 	}
 
@@ -505,10 +505,10 @@ func (t *Tuner) changed() {
 	}
 }
 
-// fmFilterArgs builds the ffmpeg stage: cut everything above the 15 kHz FM audio
+// filterArgs builds the ffmpeg stage: cut everything above the 15 kHz FM audio
 // band, lift the level if the config asks for it, and upmix to the stereo the
 // zone expects.
-func (t *Tuner) fmFilterArgs() []string {
+func (t *Tuner) filterArgs() []string {
 	af := fmt.Sprintf("lowpass=f=%d", tunerAudioHz)
 	if t.cfg.BoostDB != 0 {
 		af += ",volume=" + strconv.FormatFloat(t.cfg.BoostDB, 'g', -1, 64) + "dB"
