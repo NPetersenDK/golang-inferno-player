@@ -87,6 +87,7 @@ FROM debian:bookworm-slim AS welle-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake git ca-certificates pkg-config \
     libfftw3-dev libfaad-dev libmp3lame-dev libmpg123-dev librtlsdr-dev \
+    xxd \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone --depth 1 https://github.com/AlbrechtL/welle.io /build/welle.io && \
     cmake -S /build/welle.io -B /build/out \
