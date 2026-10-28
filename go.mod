@@ -1,5 +1,5 @@
 module dante-player
 
-go 1.21
+go 1.27
 
-require gopkg.in/yaml.v3 v3.0.1 // indirect
+require gopkg.in/yaml.v3 v3.0.1

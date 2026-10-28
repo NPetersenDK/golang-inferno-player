@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Build context is the repository root:  docker build -f docker/streamer/Dockerfile .
-FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS go-builder
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
