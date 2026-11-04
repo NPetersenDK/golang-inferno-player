@@ -3,13 +3,14 @@
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS go-builder
 ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum* ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . ./
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/dante-player .
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w -X main.version=${VERSION}" -o /out/dante-player .
 
 # Shared Rust base so the apt install runs once, not per Rust stage.
 FROM --platform=$BUILDPLATFORM rust:1-slim-bookworm AS rust-base

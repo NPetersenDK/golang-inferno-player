@@ -1,168 +1,25 @@
-html, body {
-  min-height: 100%;
-}
-
-body {
-  background-color: #121418;
-  color: #e2e8f0;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-}
-
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  border-radius: 999px;
-  padding: 0.25rem 0.65rem;
-  font-size: 0.75rem;
-  line-height: 1;
-  border: 1px solid;
-  white-space: nowrap;
-}
-
-.status-pill-online {
-  color: #d4ffe6;
-  background: linear-gradient(180deg, #1f6d4a 0%, #164d36 100%);
-  border-color: #35b67a;
-}
-
-.status-pill-info {
-  color: #d9ecff;
-  background: linear-gradient(180deg, #1d456b 0%, #14324f 100%);
-  border-color: #3880c4;
-}
-
-.status-pill-offline {
-  color: #ffd9d9;
-  background: linear-gradient(180deg, #79363d 0%, #5a272d 100%);
-  border-color: #d15d66;
-}
-
-.zone-item {
-  background-color: var(--bs-body-bg);
-  border: 1px solid var(--bs-border-color);
-  border-radius: 0.375rem;
-  padding: 0.75rem;
-  margin-bottom: 0.5rem;
-  transition: border-color 0.15s ease-in-out;
-}
-
-.zone-item.active-zone {
-  border-color: var(--bs-primary);
-}
-
-.zone-item.playing-zone {
-  border-left: 4px solid var(--bs-success);
-}
-
-.vu-meter-bar {
-  height: 4px;
-  background-color: rgba(255, 255, 255, 0.1);
-  border-radius: 2px;
-  overflow: hidden;
-}
-
-.vu-meter-fill {
-  height: 100%;
-  width: 0%;
-  background: linear-gradient(90deg, #22c55e 0%, #eab308 80%, #ef4444 100%);
-  transition: width 0.1s linear;
-}
-
-.station-item {
-  border: 1px solid var(--bs-border-color);
-  border-radius: 0.375rem;
-  padding: 0.75rem;
-  background-color: var(--bs-body-bg);
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  transition: transform 0.1s ease, border-color 0.15s ease;
-}
-
-.station-item:hover {
-  border-color: var(--bs-primary);
-  background-color: var(--bs-tertiary-bg);
-}
-
-.nav-pills-sm .nav-link {
-  padding: 0.2rem 0.6rem;
-  font-size: 0.75rem;
-  border-radius: 999px;
-  color: var(--bs-secondary-color);
-  border: 1px solid var(--bs-border-color);
-}
-
-.nav-pills-sm .nav-link.active {
-  background-color: var(--bs-primary);
-  color: #fff;
-  border-color: var(--bs-primary);
-}
-
-.sound-pad {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 64px;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--bs-border-color);
-  border-radius: 0.375rem;
-  background-color: var(--bs-body-bg);
-  color: inherit;
-  font-size: 0.8rem;
-  font-weight: 500;
-  text-align: center;
-  transition: transform 0.05s ease, border-color 0.15s ease, background-color 0.15s ease;
-}
-
-.sound-pad:hover {
-  border-color: var(--bs-primary);
-  background-color: var(--bs-tertiary-bg);
-}
-
-.sound-pad:active {
-  transform: scale(0.97);
-  border-color: var(--bs-primary);
-}
-
-.sound-pad-active {
-  border-color: var(--bs-success);
-  box-shadow: inset 0 0 0 1px var(--bs-success);
-}
-
-.sound-pad-name {
-  max-width: 100%;
-}
-
-.playing-sound {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.25rem 0.5rem;
-  margin-bottom: 0.25rem;
-  border: 1px solid var(--bs-border-color);
-  border-radius: 0.375rem;
-  background-color: var(--bs-body-bg);
-}
-
-.playing-sound-bar {
-  width: 90px;
-  height: 4px;
-  background-color: rgba(255, 255, 255, 0.1);
-  border-radius: 2px;
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.playing-sound-fill {
-  height: 100%;
-  width: 0%;
-  background: var(--bs-success);
-  transition: width 0.1s linear;
-}
-
-.form-range::-webkit-slider-thumb {
-  background: var(--bs-primary);
-}
+/* App-only rules; shared components live in design.css. */
+.layout { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 14px; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+.zone-item { background: var(--inset); border: 1px solid var(--border-strong); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.zone-item.active-zone { border-color: var(--accent-edge); box-shadow: 0 0 0 1px var(--accent-edge); }
+.zone-item.playing-zone { border-left: 4px solid var(--ok); }
+.zone-item.is-source { cursor: default; }
+.vu-bar { height: 4px; flex: 1; background: var(--border); border-radius: 2px; overflow: hidden; }
+.vu-fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--ok) 0%, var(--warn) 80%, var(--err) 100%); transition: width 0.1s linear; }
+.station-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.sound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.station-item { background: var(--inset); border: 1px solid transparent; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; }
+.station-item:hover, .sound-pad:hover { border-color: var(--accent-edge); background: var(--panel-2); }
+.sound-pad { min-height: 64px; padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; background: var(--inset); color: var(--text); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: transform 0.05s ease; }
+.sound-pad:active { transform: scale(0.97); border-color: var(--accent-edge); }
+.sound-pad.sound-pad-active { border-color: var(--ok); box-shadow: inset 0 0 0 1px var(--ok); }
+.sound-pad span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.playing-sound { display: flex; align-items: center; gap: 8px; padding: 4px 8px; margin-bottom: 4px; border: 1px solid transparent; border-radius: 8px; background: var(--inset); }
+.playing-sound-bar { width: 90px; height: 4px; flex: none; background: var(--border); border-radius: 2px; overflow: hidden; }
+.playing-sound-fill { height: 100%; background: var(--ok); }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.vol-text { width: 36px; text-align: right; }
+.search { flex: 1; min-width: 160px; max-width: 320px; }
+.station-desc { min-height: 2.4em; line-height: 1.2; }
+.empty { text-align: center; padding: 32px 0; color: var(--muted); }

@@ -15,6 +15,9 @@ import (
 	"dante-player/engine"
 )
 
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
+
 //go:embed web/*
 var webFS embed.FS
 
@@ -56,7 +59,7 @@ func main() {
 	}
 
 	mgr := engine.NewPlaybackManager(cfg)
-	server := api.NewServer(cfg, mgr, strippedWebFS)
+	server := api.NewServer(cfg, mgr, strippedWebFS, version)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)

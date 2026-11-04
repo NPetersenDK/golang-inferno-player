@@ -20,6 +20,9 @@ type Server struct {
 	mgr   *engine.PlaybackManager
 	webFS fs.FS
 	mux   *http.ServeMux
+
+	// version replaces {{VERSION}} in index.html.
+	version string
 }
 
 type PlayRequest struct {
@@ -34,12 +37,14 @@ type VolumeRequest struct {
 	Volume int `json:"volume"`
 }
 
-func NewServer(cfg *config.AppConfig, mgr *engine.PlaybackManager, webFS fs.FS) *Server {
+func NewServer(cfg *config.AppConfig, mgr *engine.PlaybackManager, webFS fs.FS, version string) *Server {
 	s := &Server{
 		cfg:   cfg,
 		mgr:   mgr,
 		webFS: webFS,
 		mux:   http.NewServeMux(),
+
+		version: version,
 	}
 	s.routes()
 	return s
@@ -59,7 +64,20 @@ func (s *Server) routes() {
 	if s.webFS != nil {
 		fileServer := http.FileServer(http.FS(s.webFS))
 		s.mux.Handle("/", fileServer)
+		s.mux.HandleFunc("/{$}", s.handleIndex)
+		s.mux.HandleFunc("/index.html", s.handleIndex)
 	}
+}
+
+// handleIndex serves index.html with {{VERSION}} filled in.
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	data, err := fs.ReadFile(s.webFS, "index.html")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(strings.ReplaceAll(string(data), "{{VERSION}}", s.version)))
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

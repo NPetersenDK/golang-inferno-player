@@ -51,10 +51,10 @@ function setupEventListeners() {
   });
 
   categoryNav.addEventListener("click", (e) => {
-    const link = e.target.closest(".nav-link");
+    const link = e.target.closest(".chip");
     if (link) {
-      document.querySelectorAll("#categoryNav .nav-link").forEach(el => el.classList.remove("active"));
-      link.classList.add("active");
+      document.querySelectorAll("#categoryNav .chip").forEach(el => el.classList.remove("on"));
+      link.classList.add("on");
       currentCategory = link.dataset.category;
       renderStations();
     }
@@ -65,7 +65,7 @@ function setupEventListeners() {
   });
 
   sourceTabs.addEventListener("click", (e) => {
-    const btn = e.target.closest(".nav-link");
+    const btn = e.target.closest(".tab");
     if (btn) showPanel(btn.dataset.panel);
   });
 
@@ -82,6 +82,10 @@ function setupEventListeners() {
     });
   });
 
+  const customUrlModal = document.getElementById("customUrlModal");
+  document.getElementById("openCustomModalBtn").addEventListener("click", () => customUrlModal.showModal());
+  document.getElementById("customCancelBtn").addEventListener("click", () => customUrlModal.close());
+
   customStreamForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const zoneId = parseInt(modalZoneSelect.value, 10) || activeZoneId;
@@ -96,9 +100,7 @@ function setupEventListeners() {
       body: JSON.stringify({ stream_url: url, station_name: name })
     });
 
-    const modalEl = document.getElementById("customUrlModal");
-    const modal = bootstrap.Modal.getInstance(modalEl);
-    if (modal) modal.hide();
+    document.getElementById("customUrlModal").close();
     customStreamForm.reset();
   });
 }
@@ -184,10 +186,10 @@ function renderCategoryPills() {
     currentCategory = "all";
   }
 
-  let html = `<li class="nav-item"><button class="nav-link ${currentCategory === 'all' ? 'active' : ''}" data-category="all">All</button></li>`;
+  let html = `<button class="chip ${currentCategory === 'all' ? 'on' : ''}" data-category="all">All</button>`;
 
   categories.forEach(cat => {
-    html += `<li class="nav-item"><button class="nav-link ${currentCategory === cat ? 'active' : ''}" data-category="${escapeHtml(cat)}">${escapeHtml(cat)}</button></li>`;
+    html += `<button class="chip ${currentCategory === cat ? 'on' : ''}" data-category="${escapeHtml(cat)}">${escapeHtml(cat)}</button>`;
   });
 
   categoryNav.innerHTML = html;
@@ -195,8 +197,8 @@ function renderCategoryPills() {
 
 function showPanel(name) {
   activePanel = name;
-  sourceTabs.querySelectorAll(".nav-link").forEach(btn => {
-    btn.classList.toggle("active", btn.dataset.panel === name);
+  sourceTabs.querySelectorAll(".tab").forEach(btn => {
+    btn.classList.toggle("on", btn.dataset.panel === name);
   });
   ["radio", "fm", "soundboard"].forEach(panel => {
     const el = document.getElementById(`panel-${panel}`);
@@ -228,48 +230,49 @@ function renderTuner() {
     ? `${escapeHtml(tuner.channel)}${tuner.service_id ? ` · service ${escapeHtml(tuner.service_id)}` : " · no service selected"}`
     : `${mhz} MHz`;
   const status = tuner.error
-    ? `<span class="text-danger">${escapeHtml(tuner.error)}</span>`
+    ? `<span class="error">${escapeHtml(tuner.error)}</span>`
     : tuner.tuned
-      ? `<span class="text-success">${tuner.mode === "dab" ? "DAB+" : "FM"} — ${tunedTo}</span>`
-      : `<span class="text-muted">Off</span>`;
+      ? `<span class="success">${tuner.mode === "dab" ? "DAB+" : "FM"} — ${tunedTo}</span>`
+      : `<span class="muted">Off</span>`;
 
   // One dongle serves both modes, so the presets are one list and picking any of
   // them takes the tuner away from whatever it was doing.
   const presets = (tuner.presets || []).map(p => `
-    <button class="btn btn-sm ${p.id === tuner.preset_id ? "btn-primary" : "btn-outline-secondary"} js-preset"
+    <button class="btn sm ${p.id === tuner.preset_id ? "primary" : ""} js-preset"
             data-preset="${escapeHtml(p.id)}">
-      <span class="badge bg-secondary me-1">${p.mode === "dab" ? "DAB+" : "FM"}</span>${escapeHtml(p.name)}
+      <span class="badge muted">${p.mode === "dab" ? "DAB+" : "FM"}</span> ${escapeHtml(p.name)}
     </button>`).join("");
 
   panel.innerHTML = `
-    <div class="d-flex justify-content-between align-items-center mb-3">
-      <span class="fw-semibold"><i class="fa-solid fa-tower-broadcast me-1"></i> Radio</span>
+    <div class="row">
+      <strong><i class="fa-solid fa-tower-broadcast"></i> Radio</strong>
+      <span class="spacer"></span>
       <span class="small">${status}</span>
     </div>
 
-    <div class="d-flex flex-wrap gap-2 mb-3">${presets || '<span class="text-muted small">No presets configured.</span>'}</div>
+    <div class="toolbar">${presets || '<span class="muted small">No presets configured.</span>'}</div>
 
-    <p class="text-muted small mb-2">FM and DAB+ share the one receiver, so only one plays at a time.</p>
+    <p class="note">FM and DAB+ share the one receiver, so only one plays at a time.</p>
 
-    <div class="d-flex gap-2 mb-2" style="max-width: 420px;">
-      <input type="number" class="form-control form-control-sm js-freq" step="0.1" min="87.5" max="108"
+    <div class="toolbar" style="max-width:420px">
+      <input type="number" class="grow js-freq" step="0.1" min="87.5" max="108"
              placeholder="FM MHz" value="${mhz || ""}">
-      <button class="btn btn-sm btn-outline-primary text-nowrap js-tune">Tune FM</button>
+      <button class="btn sm nowrap js-tune">Tune FM</button>
     </div>
 
-    <div class="d-flex gap-2 mb-2" style="max-width: 420px;">
-      <input type="text" class="form-control form-control-sm js-chan" placeholder="Channel, e.g. 12A"
+    <div class="toolbar" style="max-width:420px">
+      <input type="text" class="grow js-chan" style="min-width:0" placeholder="Channel, e.g. 12A"
              value="${escapeHtml(tuner.channel || "")}">
-      <input type="text" class="form-control form-control-sm js-sid" placeholder="Service, e.g. 0x9001"
+      <input type="text" class="grow js-sid" style="min-width:0" placeholder="Service, e.g. 0x9001"
              value="${escapeHtml(tuner.service_id || "")}">
-      <button class="btn btn-sm btn-outline-primary text-nowrap js-dab">Tune DAB+</button>
+      <button class="btn sm nowrap js-dab">Tune DAB+</button>
     </div>
 
-    <div class="d-flex gap-2">
-      <button class="btn btn-sm btn-outline-secondary js-scan">List services</button>
-      <button class="btn btn-sm btn-outline-danger js-off">Off</button>
+    <div class="toolbar">
+      <button class="btn sm js-scan">List services</button>
+      <button class="btn sm ghost danger js-off">Off</button>
     </div>
-    <pre class="small mt-2 mb-0 js-services" hidden></pre>`;
+    <pre class="log small js-services" style="margin:0" hidden></pre>`;
 
   panel.querySelectorAll(".js-preset").forEach(btn => {
     btn.addEventListener("click", () => tune({ preset_id: btn.dataset.preset }));
@@ -360,35 +363,30 @@ function buildSoundsGrid(sounds, sb) {
 
   if (sb.error) {
     soundsGrid.innerHTML = `
-      <div class="col-12 text-center text-muted py-5">
-        <p class="mb-1"><i class="fa-solid fa-triangle-exclamation me-1"></i> ${escapeHtml(sb.error)}</p>
+      <div class="empty">
+        <p style="margin:0"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(sb.error)}</p>
       </div>`;
     return;
   }
 
   if (sounds.length === 0) {
     soundsGrid.innerHTML = `
-      <div class="col-12 text-center text-muted py-5">
-        <p class="mb-1"><i class="fa-solid fa-folder-open me-1"></i> No sounds found.</p>
-        <small class="opacity-75">Drop audio files into <code>${escapeHtml(sb.path || "the sounds directory")}</code> — they appear here without a restart.</small>
+      <div class="empty">
+        <p style="margin:0"><i class="fa-solid fa-folder-open"></i> No sounds found.</p>
+        <small>Drop audio files into <code>${escapeHtml(sb.path || "the sounds directory")}</code> — they appear here without a restart.</small>
       </div>`;
     return;
   }
 
   sounds.forEach(snd => {
-    const col = document.createElement("div");
-    col.className = "col-6 col-md-4 col-xl-3";
-    col.innerHTML = `
-      <button class="sound-pad w-100">
-        <span class="sound-pad-name text-truncate">${escapeHtml(snd.name)}</span>
-      </button>`;
-
-    const root = col.querySelector(".sound-pad");
+    const root = document.createElement("button");
+    root.className = "sound-pad";
+    root.innerHTML = `<span>${escapeHtml(snd.name)}</span>`;
     root.title = snd.duration_ms ? `${snd.name} (${(snd.duration_ms / 1000).toFixed(1)}s)` : snd.name;
     root.addEventListener("click", () => playSound(snd.id));
 
     soundNodes.set(snd.id, { root });
-    soundsGrid.appendChild(col);
+    soundsGrid.appendChild(root);
   });
 }
 
@@ -404,10 +402,10 @@ function renderPlaying(playing) {
       const row = document.createElement("div");
       row.className = "playing-sound";
       row.innerHTML = `
-        <button class="btn btn-sm btn-outline-danger py-0 px-2 js-stop" title="Stop this sound">
-          <i class="fa-solid fa-stop fa-xs"></i>
+        <button class="btn sm ghost danger js-stop" title="Stop this sound">
+          <i class="fa-solid fa-stop"></i>
         </button>
-        <span class="small text-truncate flex-grow-1">${escapeHtml(v.name)}</span>
+        <span class="small truncate grow">${escapeHtml(v.name)}</span>
         <div class="playing-sound-bar"><div class="playing-sound-fill js-bar"></div></div>`;
 
       row.querySelector(".js-stop").addEventListener("click", () => {
@@ -487,40 +485,40 @@ function createZoneNode(zone) {
   const root = document.createElement("div");
   root.className = "zone-item";
   root.innerHTML = `
-    <div class="d-flex justify-content-between align-items-center mb-1">
-      <div>
-        <span class="fw-semibold small js-name"></span>
-        <span class="text-muted d-block js-channels" style="font-size: 0.7rem;"></span>
+    <div class="row">
+      <div class="grow">
+        <div class="small"><strong class="js-name"></strong></div>
+        <div class="muted small js-channels"></div>
       </div>
       <div class="js-badge"></div>
     </div>
 
-    <div class="small text-truncate mb-2 text-secondary" style="font-size: 0.75rem;">
-      <i class="fa-solid fa-music me-1"></i> <span class="js-station"></span>
+    <div class="small muted truncate">
+      <i class="fa-solid fa-music"></i> <span class="js-station"></span>
     </div>
 
-    <div class="small text-truncate mb-2 text-success js-sounds" style="font-size: 0.75rem;" hidden>
-      <i class="fa-solid fa-grip me-1"></i> <span class="js-sound-label"></span>
+    <div class="small truncate js-sounds" style="color:var(--ok)" hidden>
+      <i class="fa-solid fa-grip"></i> <span class="js-sound-label"></span>
     </div>
 
-    <div class="d-flex flex-column gap-1 mb-2">
-      <div class="d-flex align-items-center gap-1">
-        <span style="font-size: 0.65rem; width: 8px;" class="text-muted">L</span>
-        <div class="vu-meter-bar flex-grow-1"><div class="vu-meter-fill js-vu-l" style="width: 0%;"></div></div>
+    <div class="stack" style="gap:4px">
+      <div class="row" style="gap:6px">
+        <span class="muted small" style="width:8px">L</span>
+        <div class="vu-bar"><div class="vu-fill js-vu-l" style="width: 0%;"></div></div>
       </div>
-      <div class="d-flex align-items-center gap-1">
-        <span style="font-size: 0.65rem; width: 8px;" class="text-muted">R</span>
-        <div class="vu-meter-bar flex-grow-1"><div class="vu-meter-fill js-vu-r" style="width: 0%;"></div></div>
+      <div class="row" style="gap:6px">
+        <span class="muted small" style="width:8px">R</span>
+        <div class="vu-bar"><div class="vu-fill js-vu-r" style="width: 0%;"></div></div>
       </div>
     </div>
 
-    <div class="d-flex align-items-center gap-2">
-      <button class="btn btn-sm btn-outline-secondary py-0 px-2 btn-mute">
+    <div class="row" style="gap:8px">
+      <button class="btn sm btn-mute">
         <i class="fa-solid js-mute-icon"></i>
       </button>
-      <input type="range" class="form-range flex-grow-1 vol-slider" min="0" max="100" value="${zone.volume}"/>
-      <span class="small text-muted text-end js-vol-text" style="width: 32px; font-size: 0.75rem;"></span>
-      <button class="btn btn-sm btn-outline-danger py-0 px-2 btn-stop" title="Stop Zone">
+      <input type="range" class="grow vol-slider" min="0" max="100" value="${zone.volume}"/>
+      <span class="small muted vol-text js-vol-text"></span>
+      <button class="btn sm ghost danger btn-stop" title="Stop Zone">
         <i class="fa-solid fa-stop"></i>
       </button>
     </div>
@@ -599,14 +597,14 @@ function updateZoneNode(refs, zone) {
   if (statusKey !== refs.lastStatus) {
     refs.lastStatus = statusKey;
     refs.badge.innerHTML = isPlaying
-      ? '<span class="badge text-bg-success"><i class="fa-solid fa-play fa-xs me-1"></i>Playing</span>'
+      ? '<span class="badge ok"><i class="fa-solid fa-play"></i> Playing</span>'
       : isBuffering
-        ? '<span class="badge text-bg-warning"><i class="fa-solid fa-spinner fa-spin fa-xs me-1"></i>Buffering</span>'
+        ? '<span class="badge warn"><i class="fa-solid fa-spinner fa-spin"></i> Buffering</span>'
         : pad !== ""
-          ? '<span class="badge text-bg-success"><i class="fa-solid fa-grip fa-xs me-1"></i>Sounds</span>'
+          ? '<span class="badge ok"><i class="fa-solid fa-grip"></i> Sounds</span>'
           : zone.is_source
-            ? '<span class="badge text-bg-secondary"><i class="fa-solid fa-plug fa-xs me-1"></i>Waiting</span>'
-            : '<span class="badge text-bg-secondary">Idle</span>';
+            ? '<span class="badge muted"><i class="fa-solid fa-plug"></i> Waiting</span>'
+            : '<span class="badge muted">Idle</span>';
   }
 
   const peakLPct = audible ? Math.min(100, Math.round((zone.peak_left || 0) * 100)) : 0;
@@ -616,7 +614,7 @@ function updateZoneNode(refs, zone) {
 
   const muted = zone.muted || zone.volume === 0;
   refs.muteBtn.title = zone.muted ? "Unmute" : "Mute";
-  refs.muteIcon.className = `fa-solid js-mute-icon ${muted ? "fa-volume-xmark text-danger" : "fa-volume-high"}`;
+  refs.muteIcon.className = `fa-solid js-mute-icon ${muted ? "fa-volume-xmark error" : "fa-volume-high"}`;
 
   if (!refs.dragging && document.activeElement !== refs.slider) {
     if (refs.slider.value !== String(zone.volume)) refs.slider.value = zone.volume;
@@ -647,9 +645,9 @@ function renderStations() {
 
   if (filtered.length === 0) {
     stationsGrid.innerHTML = `
-      <div class="col-12 text-center text-muted py-5">
-        <p class="mb-1"><i class="fa-solid fa-circle-exclamation me-1"></i> No stations found.</p>
-        <small class="opacity-75">Define your stations in <code>config.yaml</code> or click "Custom URL" in the top bar.</small>
+      <div class="empty">
+        <p style="margin:0"><i class="fa-solid fa-circle-exclamation"></i> No stations found.</p>
+        <small>Define your stations in <code>config.yaml</code> or click "Custom URL" in the top bar.</small>
       </div>
     `;
     return;
@@ -657,26 +655,20 @@ function renderStations() {
 
   filtered.forEach(st => {
     const col = document.createElement("div");
-    col.className = "col-sm-6 col-md-4 col-xl-3";
+    col.className = "station-item";
 
     col.innerHTML = `
-      <div class="station-item">
-        <div>
-          <div class="d-flex justify-content-between align-items-start gap-1 mb-1">
-            <span class="fw-semibold text-truncate small">${escapeHtml(st.name)}</span>
-            <span class="badge text-bg-dark border" style="font-size: 0.65rem;">${escapeHtml(st.category || 'Stream')}</span>
-          </div>
-          <p class="text-muted small mb-2" style="font-size: 0.75rem; min-height: 2.2em; line-height: 1.2;">
-            ${escapeHtml(st.description || '')}
-          </p>
+      <div>
+        <div class="row" style="align-items:flex-start;gap:6px">
+          <strong class="small truncate grow">${escapeHtml(st.name)}</strong>
+          <span class="badge muted">${escapeHtml(st.category || 'Stream')}</span>
         </div>
+        <p class="muted small station-desc" style="margin:4px 0 0">${escapeHtml(st.description || '')}</p>
+      </div>
 
-        <div class="d-flex justify-content-between align-items-center pt-2 border-top">
-          <span class="text-muted" style="font-size: 0.7rem;"><i class="fa-solid fa-wave-square me-1"></i>${escapeHtml(st.bitrate || '192k')}</span>
-          <button class="btn btn-sm btn-primary py-0 px-2 btn-play" style="font-size: 0.75rem;">
-            <i class="fa-solid fa-play fa-xs me-1"></i> Play
-          </button>
-        </div>
+      <div class="row" style="border-top:1px solid var(--border);padding-top:8px">
+        <span class="muted small grow"><i class="fa-solid fa-wave-square"></i> ${escapeHtml(st.bitrate || '192k')}</span>
+        <button class="btn sm primary btn-play"><i class="fa-solid fa-play"></i> Play</button>
       </div>
     `;
 
