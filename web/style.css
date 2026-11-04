@@ -7,7 +7,7 @@
 .zone-item.is-source { cursor: default; }
 .vu-bar { height: 4px; flex: 1; background: var(--border); border-radius: 2px; overflow: hidden; }
 .vu-fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--ok) 0%, var(--warn) 80%, var(--err) 100%); transition: width 0.1s linear; }
-.station-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.station-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; }
 .sound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
 .station-item { background: var(--inset); border: 1px solid transparent; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; }
 .station-item:hover, .sound-pad:hover { border-color: var(--accent-edge); background: var(--panel-2); }
