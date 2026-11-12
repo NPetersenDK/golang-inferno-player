@@ -66,7 +66,7 @@ function setupEventListeners() {
 
   sourceTabs.addEventListener("click", (e) => {
     const btn = e.target.closest(".tab");
-    if (btn) showPanel(btn.dataset.panel);
+    if (btn) showPanel(btn.dataset.tab);
   });
 
   soundSearchInput.addEventListener("input", (e) => {
@@ -195,13 +195,20 @@ function renderCategoryPills() {
   categoryNav.innerHTML = html;
 }
 
+// The tabs follow the design's data-tab / data-panel convention, but the switching
+// stays here: a tab can be hidden when its feature is off, and then the panel falls
+// back to the radio.
+function panelEl(name) {
+  return document.querySelector(`[data-panel="${name}"]`);
+}
+
 function showPanel(name) {
   activePanel = name;
   sourceTabs.querySelectorAll(".tab").forEach(btn => {
-    btn.classList.toggle("on", btn.dataset.panel === name);
+    btn.classList.toggle("on", btn.dataset.tab === name);
   });
   ["radio", "fm", "soundboard"].forEach(panel => {
-    const el = document.getElementById(`panel-${panel}`);
+    const el = panelEl(panel);
     if (el) el.hidden = panel !== name;
   });
 }
@@ -214,7 +221,7 @@ function setTabEnabled(tabId, enabled, panel) {
 }
 
 function renderTuner() {
-  const panel = document.getElementById("panel-fm");
+  const panel = panelEl("fm");
   if (!panel) return;
 
   const tuner = systemState.tuner;
@@ -232,7 +239,7 @@ function renderTuner() {
   const status = tuner.error
     ? `<span class="error">${escapeHtml(tuner.error)}</span>`
     : tuner.tuned
-      ? `<span class="success">${tuner.mode === "dab" ? "DAB+" : "FM"} — ${tunedTo}</span>`
+      ? `<span class="success">${tuner.mode === "dab" ? "DAB+" : "FM"}: ${tunedTo}</span>`
       : `<span class="muted">Off</span>`;
 
   // One dongle serves both modes, so the presets are one list and picking any of
@@ -254,16 +261,16 @@ function renderTuner() {
 
     <p class="note">FM and DAB+ share the one receiver, so only one plays at a time.</p>
 
-    <div class="toolbar" style="max-width:420px">
+    <div class="toolbar tune-row">
       <input type="number" class="grow js-freq" step="0.1" min="87.5" max="108"
              placeholder="FM MHz" value="${mhz || ""}">
       <button class="btn sm nowrap js-tune">Tune FM</button>
     </div>
 
-    <div class="toolbar" style="max-width:420px">
-      <input type="text" class="grow js-chan" style="min-width:0" placeholder="Channel, e.g. 12A"
+    <div class="toolbar tune-row">
+      <input type="text" class="grow js-chan" placeholder="Channel, e.g. 12A"
              value="${escapeHtml(tuner.channel || "")}">
-      <input type="text" class="grow js-sid" style="min-width:0" placeholder="Service, e.g. 0x9001"
+      <input type="text" class="grow js-sid" placeholder="Service, e.g. 0x9001"
              value="${escapeHtml(tuner.service_id || "")}">
       <button class="btn sm nowrap js-dab">Tune DAB+</button>
     </div>
@@ -272,7 +279,7 @@ function renderTuner() {
       <button class="btn sm js-scan">List services</button>
       <button class="btn sm ghost danger js-off">Off</button>
     </div>
-    <pre class="log small js-services" style="margin:0" hidden></pre>`;
+    <pre class="log small js-services" hidden></pre>`;
 
   panel.querySelectorAll(".js-preset").forEach(btn => {
     btn.addEventListener("click", () => tune({ preset_id: btn.dataset.preset }));
@@ -364,7 +371,7 @@ function buildSoundsGrid(sounds, sb) {
   if (sb.error) {
     soundsGrid.innerHTML = `
       <div class="empty">
-        <p style="margin:0"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(sb.error)}</p>
+        <div><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(sb.error)}</div>
       </div>`;
     return;
   }
@@ -372,8 +379,8 @@ function buildSoundsGrid(sounds, sb) {
   if (sounds.length === 0) {
     soundsGrid.innerHTML = `
       <div class="empty">
-        <p style="margin:0"><i class="fa-solid fa-folder-open"></i> No sounds found.</p>
-        <small>Drop audio files into <code>${escapeHtml(sb.path || "the sounds directory")}</code> — they appear here without a restart.</small>
+        <div><i class="fa-solid fa-folder-open"></i> No sounds found.</div>
+        <small>Drop audio files into <code>${escapeHtml(sb.path || "the sounds directory")}</code>: they appear here without a restart.</small>
       </div>`;
     return;
   }
@@ -406,7 +413,7 @@ function renderPlaying(playing) {
           <i class="fa-solid fa-stop"></i>
         </button>
         <span class="small truncate grow">${escapeHtml(v.name)}</span>
-        <div class="playing-sound-bar"><div class="playing-sound-fill js-bar"></div></div>`;
+        <div class="progress"><div class="progress-fill js-bar"></div></div>`;
 
       row.querySelector(".js-stop").addEventListener("click", () => {
         fetch("/api/soundboard/stop", {
@@ -497,22 +504,20 @@ function createZoneNode(zone) {
       <i class="fa-solid fa-music"></i> <span class="js-station"></span>
     </div>
 
-    <div class="small truncate js-sounds" style="color:var(--ok)" hidden>
+    <div class="success truncate js-sounds" hidden>
       <i class="fa-solid fa-grip"></i> <span class="js-sound-label"></span>
     </div>
 
-    <div class="stack" style="gap:4px">
-      <div class="row" style="gap:6px">
-        <span class="muted small" style="width:8px">L</span>
-        <div class="vu-bar"><div class="vu-fill js-vu-l" style="width: 0%;"></div></div>
-      </div>
-      <div class="row" style="gap:6px">
-        <span class="muted small" style="width:8px">R</span>
-        <div class="vu-bar"><div class="vu-fill js-vu-r" style="width: 0%;"></div></div>
-      </div>
+    <div class="row tight">
+      <span class="muted small vu-label">L</span>
+      <div class="meter grow js-vu-l"><div class="meter-cover"></div></div>
+    </div>
+    <div class="row tight">
+      <span class="muted small vu-label">R</span>
+      <div class="meter grow js-vu-r"><div class="meter-cover"></div></div>
     </div>
 
-    <div class="row" style="gap:8px">
+    <div class="row tight">
       <button class="btn sm btn-mute">
         <i class="fa-solid js-mute-icon"></i>
       </button>
@@ -607,10 +612,11 @@ function updateZoneNode(refs, zone) {
             : '<span class="badge muted">Idle</span>';
   }
 
+  // The design's meter: --lvl is the level in percent, the cover hides the rest.
   const peakLPct = audible ? Math.min(100, Math.round((zone.peak_left || 0) * 100)) : 0;
   const peakRPct = audible ? Math.min(100, Math.round((zone.peak_right || 0) * 100)) : 0;
-  refs.vuL.style.width = `${peakLPct}%`;
-  refs.vuR.style.width = `${peakRPct}%`;
+  refs.vuL.style.setProperty("--lvl", peakLPct);
+  refs.vuR.style.setProperty("--lvl", peakRPct);
 
   const muted = zone.muted || zone.volume === 0;
   refs.muteBtn.title = zone.muted ? "Unmute" : "Mute";
@@ -646,7 +652,7 @@ function renderStations() {
   if (filtered.length === 0) {
     stationsGrid.innerHTML = `
       <div class="empty">
-        <p style="margin:0"><i class="fa-solid fa-circle-exclamation"></i> No stations found.</p>
+        <div><i class="fa-solid fa-circle-exclamation"></i> No stations found.</div>
         <small>Define your stations in <code>config.yaml</code> or click "Custom URL" in the top bar.</small>
       </div>
     `;
@@ -659,14 +665,14 @@ function renderStations() {
 
     col.innerHTML = `
       <div>
-        <div class="row" style="align-items:flex-start;gap:6px">
+        <div class="row tight station-head">
           <strong class="small truncate grow">${escapeHtml(st.name)}</strong>
           <span class="badge muted">${escapeHtml(st.category || 'Stream')}</span>
         </div>
-        <p class="muted small station-desc" style="margin:4px 0 0">${escapeHtml(st.description || '')}</p>
+        <p class="muted small station-desc">${escapeHtml(st.description || '')}</p>
       </div>
 
-      <div class="row" style="border-top:1px solid var(--border);padding-top:8px">
+      <div class="row station-foot">
         <span class="muted small grow"><i class="fa-solid fa-wave-square"></i> ${escapeHtml(st.bitrate || '192k')}</span>
         <button class="btn sm primary btn-play"><i class="fa-solid fa-play"></i> Play</button>
       </div>

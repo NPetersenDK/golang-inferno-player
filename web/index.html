@@ -12,9 +12,9 @@
 <div class="app">
 
   <header class="topbar">
-    <a class="brand row" href="#"><i class="fa-solid fa-tower-broadcast" style="color:var(--err)"></i><span>Dante Streamer</span></a>
+    <a class="brand row" href="#"><i class="fa-solid fa-tower-broadcast"></i><span>Dante Streamer</span></a>
     <span class="spacer"></span>
-    <div class="toolbar">
+    <div class="toolbar end">
       <span class="badge ok" id="clockPill"><i class="fa-solid fa-clock"></i> <span id="clockStatusText">PTP Locked (48kHz)</span></span>
       <span class="badge info" id="devicePill"><i class="fa-solid fa-network-wired"></i> <span id="danteDeviceText">Dante-Pi</span></span>
       <button id="stopAllBtn" class="btn sm ghost danger" title="Stop playback on all zones"><i class="fa-solid fa-stop"></i> Stop All</button>
@@ -33,7 +33,7 @@
             <span class="spacer"></span>
             <span class="badge muted" id="activeZonesCount">0 Active</span>
           </div>
-          <div id="zonesList" class="stack" style="gap:8px">
+          <div id="zonesList" class="stack tight">
             <div class="empty" id="zonesPlaceholder">
               <i class="fa-solid fa-spinner fa-spin"></i> Connecting to Dante engine...
             </div>
@@ -42,18 +42,18 @@
 
         <section class="card">
           <div class="toolbar">
-            <div class="tabs grow" id="sourceTabs" style="border-bottom:0">
-              <button class="tab on" data-panel="radio"><i class="fa-solid fa-radio"></i> Internet Radio</button>
-              <button class="tab" id="tabFm" data-panel="fm" hidden><i class="fa-solid fa-tower-broadcast"></i> Radio</button>
-              <button class="tab" id="tabSoundboard" data-panel="soundboard" hidden><i class="fa-solid fa-grip"></i> Soundboard</button>
+            <div class="tabs bare grow" id="sourceTabs">
+              <button class="tab on" data-tab="radio"><i class="fa-solid fa-radio"></i> Internet Radio</button>
+              <button class="tab" id="tabFm" data-tab="fm" hidden><i class="fa-solid fa-tower-broadcast"></i> Radio</button>
+              <button class="tab" id="tabSoundboard" data-tab="soundboard" hidden><i class="fa-solid fa-grip"></i> Soundboard</button>
             </div>
             <span class="muted small nowrap">Play to:</span>
-            <select id="targetZoneSelect" style="min-width:140px">
+            <select id="targetZoneSelect" class="zone-select">
               <option value="1">Zone 1</option>
             </select>
           </div>
 
-          <div id="panel-radio" class="stack" style="gap:12px">
+          <div data-panel="radio" class="stack tight">
             <div class="row">
               <i class="fa-solid fa-magnifying-glass muted"></i>
               <input type="text" id="stationSearchInput" class="grow" placeholder="Search station name or description..."/>
@@ -61,7 +61,7 @@
 
             <div class="chips" id="categoryNav"></div>
 
-            <div class="station-grid" id="stationsGrid">
+            <div class="grid-auto station-grid" id="stationsGrid">
               <div class="empty">
                 <i class="fa-solid fa-spinner fa-spin"></i> Loading stations...
               </div>
@@ -69,9 +69,9 @@
           </div>
 
           <!-- Filled by app.js only when the tuner feature is enabled -->
-          <div id="panel-fm" class="stack" style="gap:12px" hidden></div>
+          <div data-panel="fm" class="stack tight" hidden></div>
 
-          <div id="panel-soundboard" class="stack" style="gap:12px" hidden>
+          <div data-panel="soundboard" class="stack tight" hidden>
             <div class="toolbar">
               <i class="fa-solid fa-magnifying-glass muted"></i>
               <input type="text" id="soundSearchInput" class="search" placeholder="Search sounds..."/>
@@ -83,7 +83,7 @@
 
             <div id="playingSounds"></div>
 
-            <div class="sound-grid" id="soundsGrid"></div>
+            <div class="grid-auto sound-grid" id="soundsGrid"></div>
           </div>
         </section>
 
@@ -91,17 +91,17 @@
     </div>
   </main>
 
-  <footer class="footer muted">A project by NPetersen - <a href="https://github.com/NPetersenDK"><i class="fa-brands fa-github"></i> NPetersenDK</a> - <a href="https://nipetersen.dk">nipetersen.dk</a></footer>
+  <footer class="footer muted">A project by NPetersen - <a href="https://github.com/NPetersenDK"><i class="fa-brands fa-github"></i> NPetersenDK</a> - <a href="https://nipetersen.dk">nipetersen.dk</a> - <a href="https://twitch.tv/NPetersen"><i class="fa-brands fa-twitch"></i> NPetersen</a> - {{VERSION}}</footer>
 
 </div>
 
 <dialog class="modal wide" id="customUrlModal" aria-labelledby="customUrlModalLabel">
   <div class="row">
-    <h2 id="customUrlModalLabel" style="font-size:16px"><i class="fa-solid fa-link"></i> Stream Custom Audio URL</h2>
+    <h2 id="customUrlModalLabel"><i class="fa-solid fa-link"></i> Stream Custom Audio URL</h2>
     <span class="spacer"></span>
-    <form method="dialog"><button class="btn sm ghost" aria-label="Close"><i class="fa-solid fa-xmark"></i></button></form>
+    <form method="dialog"><button class="btn sm ghost icon" aria-label="Close"><i class="fa-solid fa-xmark"></i></button></form>
   </div>
-  <form id="customStreamForm" class="stack" style="gap:14px">
+  <form id="customStreamForm" class="stack tight">
     <label>Target Zone
       <select id="modalZoneSelect"></select>
     </label>
@@ -111,8 +111,8 @@
     <label>Display Name (Optional)
       <input type="text" id="customNameInput" placeholder="My Custom Stream"/>
     </label>
-    <div class="row" style="justify-content:flex-end">
-      <button type="button" class="btn" id="customCancelBtn">Cancel</button>
+    <div class="row end">
+      <button type="button" class="btn ghost" id="customCancelBtn">Cancel</button>
       <button type="submit" class="btn primary"><i class="fa-solid fa-play"></i> Play Stream</button>
     </div>
   </form>

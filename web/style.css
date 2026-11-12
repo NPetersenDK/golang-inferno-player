@@ -1,25 +1,27 @@
 /* App-only rules; shared components live in design.css. */
 .layout { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 14px; align-items: start; }
 @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+/* The source tabs sit in a toolbar next to the zone picker: no line under them. */
+.tabs.bare { border-bottom: 0; }
+.zone-select { min-width: 140px; }
 .zone-item { background: var(--inset); border: 1px solid var(--border-strong); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .zone-item.active-zone { border-color: var(--accent-edge); box-shadow: 0 0 0 1px var(--accent-edge); }
 .zone-item.playing-zone { border-left: 4px solid var(--ok); }
-.zone-item.is-source { cursor: default; }
-.vu-bar { height: 4px; flex: 1; background: var(--border); border-radius: 2px; overflow: hidden; }
-.vu-fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--ok) 0%, var(--warn) 80%, var(--err) 100%); transition: width 0.1s linear; }
-.station-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; }
-.sound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.vu-label { width: 8px; }
+.station-grid { --min: 280px; gap: 8px; }
+.sound-grid { --min: 130px; gap: 8px; }
 .station-item { background: var(--inset); border: 1px solid transparent; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; }
 .station-item:hover, .sound-pad:hover { border-color: var(--accent-edge); background: var(--panel-2); }
+.station-head { align-items: flex-start; }
+.station-desc { min-height: 2.4em; line-height: 1.2; margin: 4px 0 0; }
+.station-foot { border-top: 1px solid var(--border); padding-top: 8px; }
 .sound-pad { min-height: 64px; padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; background: var(--inset); color: var(--text); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: transform 0.05s ease; }
 .sound-pad:active { transform: scale(0.97); border-color: var(--accent-edge); }
 .sound-pad.sound-pad-active { border-color: var(--ok); box-shadow: inset 0 0 0 1px var(--ok); }
 .sound-pad span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .playing-sound { display: flex; align-items: center; gap: 8px; padding: 4px 8px; margin-bottom: 4px; border: 1px solid transparent; border-radius: 8px; background: var(--inset); }
-.playing-sound-bar { width: 90px; height: 4px; flex: none; background: var(--border); border-radius: 2px; overflow: hidden; }
-.playing-sound-fill { height: 100%; background: var(--ok); }
-.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.playing-sound .progress { width: 90px; flex: none; }
 .vol-text { width: 36px; text-align: right; }
-.search { flex: 1; min-width: 160px; max-width: 320px; }
-.station-desc { min-height: 2.4em; line-height: 1.2; }
-.empty { text-align: center; padding: 32px 0; color: var(--muted); }
+/* The tuner rows: a short line of fields. */
+.tune-row { max-width: 420px; }
+.tune-row input { min-width: 0; }
