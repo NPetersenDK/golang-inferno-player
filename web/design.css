@@ -383,6 +383,8 @@ a.btn.ghost.danger { color: var(--danger); }
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; gap: 14px;
 }
 .modal h2 { margin: 0; }
+/* The modal's flex gap spaces its paragraphs. */
+.modal > p { margin: 0; }
 /* Text-heavy dialogs (confirmations, notices): wider + left-aligned. */
 .modal.wide { max-width: 560px; text-align: left; }
 /* Detail and search dialogs: wide, scrolls inside. */
